@@ -45,6 +45,7 @@ async def execute_task_pipeline(
     stream_queue: Optional[Any] = None,
     tool_definitions: Optional[List[Dict[str, Any]]] = None,
     sub_agent_tool_definitions: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    image_urls: Optional[List[str]] = None,
 ):
     """
     Executes the full pipeline for a single task.
@@ -62,6 +63,7 @@ async def execute_task_pipeline(
         stream_queue: A queue for streaming the task execution (optional).
         tool_definitions: The definitions of the tools for the main agent (optional).
         sub_agent_tool_definitions: The definitions of the tools for the sub-agents (optional).
+        image_urls: Optional list of image URLs or local file paths for multimodal tasks.
 
     Returns:
         A tuple of (final_summary, final_boxed_answer, log_file_path, failure_experience_summary):
@@ -118,6 +120,7 @@ async def execute_task_pipeline(
             task_description=task_description,
             task_file_name=task_file_name,
             task_id=task_id,
+            image_urls=image_urls,
         )
 
         llm_client.close()

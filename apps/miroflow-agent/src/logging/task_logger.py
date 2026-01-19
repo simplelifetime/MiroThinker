@@ -19,7 +19,12 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
+
+try:
+    from typing import Literal
+except ImportError:
+    from typing_extensions import Literal
 
 # Import colorama for cross-platform colored output
 from colorama import Fore, Style, init
@@ -185,6 +190,9 @@ class TaskLog:
     step_logs: List[StepLog] = field(default_factory=list)
     trace_data: Dict[str, Any] = field(default_factory=dict)
 
+    # Mapping from base64 image data to original file paths for log compression
+    image_path_mapping: Dict[str, str] = field(default_factory=dict)
+
     def start_sub_agent_session(
         self, sub_agent_name: str, subtask_description: str
     ) -> str:
@@ -285,10 +293,40 @@ class TaskLog:
             return {k: self.serialize_for_json(v) for k, v in obj.items()}
         elif isinstance(obj, list):
             return [self.serialize_for_json(item) for item in obj]
+        elif isinstance(obj, str):
+            # Replace base64 image data with original paths for log compression
+            return self._replace_base64_images(obj)
         elif hasattr(obj, "__dict__"):
             return self.serialize_for_json(obj.__dict__)
         else:
             return obj
+
+    def _replace_base64_images(self, text: str) -> str:
+        """
+        Replace base64 image data URLs with original file paths for log compression.
+
+        Args:
+            text: The text that may contain base64 image data URLs
+
+        Returns:
+            Text with base64 image data replaced by original paths
+        """
+        import re
+
+        # Pattern to match data:image/...;base64,{data} URLs
+        pattern = r'data:image/[^;]+;base64,([^\'"\s]+)'
+
+        def replace_match(match):
+            base64_data = match.group(1)
+            # Look up the original path in our mapping
+            if base64_data in self.image_path_mapping:
+                original_path = self.image_path_mapping[base64_data]
+                # Replace with a placeholder showing the original path
+                mime_type = match.group(0).split(';')[0].split(':')[1]
+                return f"data:{mime_type};base64,[IMAGE_DATA_REPLACED:{original_path}]"
+            return match.group(0)  # Return original if not found in mapping
+
+        return re.sub(pattern, replace_match, text)
 
     def to_json(self) -> str:
         """
@@ -305,6 +343,8 @@ class TaskLog:
         """
         # Convert to dict first
         data_dict = asdict(self)
+        # Remove image_path_mapping from serialization as it's only used for log compression
+        data_dict.pop('image_path_mapping', None)
         # Serialize any non-JSON-serializable objects
         serialized_dict = self.serialize_for_json(data_dict)
         try:

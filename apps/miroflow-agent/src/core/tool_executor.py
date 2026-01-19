@@ -43,6 +43,8 @@ class ToolExecutor:
         task_log: TaskLog,
         stream_handler: StreamHandler,
         max_consecutive_rollbacks: int = 5,
+        image_context: Optional[Dict[str, str]] = None,
+        orchestrator_image_context: Optional[Dict[str, str]] = None,
     ):
         """
         Initialize the tool executor.
@@ -54,6 +56,8 @@ class ToolExecutor:
             task_log: Logger for task execution
             stream_handler: Handler for streaming events
             max_consecutive_rollbacks: Maximum allowed consecutive rollbacks
+            image_context: Optional dictionary mapping image references to URLs
+            orchestrator_image_context: Optional reference to orchestrator's image_context
         """
         self.main_agent_tool_manager = main_agent_tool_manager
         self.sub_agent_tool_managers = sub_agent_tool_managers
@@ -61,6 +65,9 @@ class ToolExecutor:
         self.task_log = task_log
         self.stream = stream_handler
         self.max_consecutive_rollbacks = max_consecutive_rollbacks
+        self.image_context = image_context or {}
+        # Reference to orchestrator's image_context for dynamic updates
+        self.orchestrator_image_context = orchestrator_image_context
 
         # Track used queries to detect duplicates
         self.used_queries: Dict[str, Dict[str, int]] = {}
@@ -276,6 +283,19 @@ class ToolExecutor:
         tool_calls_data = []
 
         try:
+            # Inject image URL for visual_search if reference_id is provided
+            if tool_name == "visual_search" and "reference_id" in arguments:
+                reference_id = arguments["reference_id"]
+                # Check orchestrator's image_context first, then fallback to own image_context
+                context_to_check = self.orchestrator_image_context if self.orchestrator_image_context is not None else self.image_context
+                if reference_id in context_to_check and "image_url" not in arguments:
+                    arguments["image_url"] = context_to_check[reference_id]
+                    self.task_log.log_step(
+                        "info",
+                        f"{agent_name} | Turn: {turn_count} | Tool Call",
+                        f"Injected image URL for {reference_id}: {arguments['image_url']}",
+                    )
+            
             # Execute tool call
             tool_result = await tool_manager.execute_tool_call(
                 server_name, tool_name, arguments

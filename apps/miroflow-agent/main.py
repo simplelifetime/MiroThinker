@@ -29,8 +29,13 @@ async def amain(cfg: DictConfig) -> None:
 
     # Define task parameters
     task_id = "task_example"
-    task_description = "What is the title of today's arxiv paper in computer science?"
+    task_description = "Please answer the following question and also provide your problem-solving roadmap. Question: The image <image: 0> is a photo of a stadium. In a video titled containing \"Premium Experience\" published on the stadium's official YouTube channel in February 2016, there's a scene where fans are cheering for a hurling goal. What is the jersey number of the player who scored the goal?"
     task_file_name = ""
+    # Optional: List of image URLs or local file paths for multimodal tasks
+    # Examples:
+    # image_urls = ["https://example.com/image.jpg"]  # URL
+    # image_urls = ["/path/to/local/image.jpg"]       # Local file path
+    image_urls = ["/home/liuzikang/MM-BrowseComp/MMBC_images/1.png"]
 
     # Execute task using the pipeline
     final_summary, final_boxed_answer, log_file_path, _ = await execute_task_pipeline(
@@ -42,6 +47,7 @@ async def amain(cfg: DictConfig) -> None:
         sub_agent_tool_managers=sub_agent_tool_managers,
         output_formatter=output_formatter,
         log_dir=cfg.debug_dir,
+        image_urls=image_urls if image_urls else None,
     )
 
 

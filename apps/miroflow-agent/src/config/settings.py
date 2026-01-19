@@ -19,7 +19,8 @@ from mcp import StdioServerParameters
 from omegaconf import DictConfig
 
 # Load environment variables from .env file
-load_dotenv()
+# load_dotenv()
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../../.env"))
 
 # API for Google Search
 SERPER_API_KEY = os.environ.get("SERPER_API_KEY")
@@ -63,6 +64,10 @@ TENCENTCLOUD_SECRET_KEY = os.environ.get("TENCENTCLOUD_SECRET_KEY")
 SUMMARY_LLM_API_KEY = os.environ.get("SUMMARY_LLM_API_KEY")
 SUMMARY_LLM_BASE_URL = os.environ.get("SUMMARY_LLM_BASE_URL")
 SUMMARY_LLM_MODEL_NAME = os.environ.get("SUMMARY_LLM_MODEL_NAME")
+
+# API for SerpAPI (Google Lens visual search)
+SERPAPI_API_KEY = os.environ.get("SERPAPI_API_KEY")
+SERPAPI_BASE_URL = os.environ.get("SERPAPI_BASE_URL", "https://serpapi.com")
 
 
 # MCP server configuration generation function
@@ -144,6 +149,23 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig):
                     command=sys.executable,
                     args=["-m", "miroflow_tools.mcp_servers.python_mcp_server"],
                     env={"E2B_API_KEY": E2B_API_KEY},
+                ),
+            }
+        )
+
+    if agent_cfg.get("tools", None) is not None and "tool-image-search" in agent_cfg["tools"]:
+        configs.append(
+            {
+                "name": "tool-image-search",
+                "params": StdioServerParameters(
+                    command=sys.executable,
+                    args=["-m", "miroflow_tools.mcp_servers.image_search_mcp_server"],
+                    env={
+                        "SERPER_API_KEY": SERPER_API_KEY,
+                        "SERPER_BASE_URL": SERPER_BASE_URL,
+                        "SERPAPI_API_KEY": SERPAPI_API_KEY,
+                        "SERPAPI_BASE_URL": SERPAPI_BASE_URL,
+                    },
                 ),
             }
         )
@@ -468,6 +490,7 @@ def get_env_info(cfg: DictConfig) -> dict:
         "has_tencent_secret_id": bool(TENCENTCLOUD_SECRET_ID),
         "has_tencent_secret_key": bool(TENCENTCLOUD_SECRET_KEY),
         "has_summary_llm_api_key": bool(SUMMARY_LLM_API_KEY),
+        "has_serpapi_api_key": bool(SERPAPI_API_KEY),
         # Base URLs
         "openai_base_url": OPENAI_BASE_URL,
         "anthropic_base_url": ANTHROPIC_BASE_URL,

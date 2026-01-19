@@ -2,6 +2,7 @@
 # This source code is licensed under the MIT License.
 
 import asyncio
+import json
 import os
 import shlex
 from urllib.parse import urlparse
@@ -460,6 +461,167 @@ async def download_file_from_sandbox_to_local(
             sandbox.set_timeout(DEFAULT_TIMEOUT)
         except Exception:
             pass  # Ignore timeout setting errors
+
+
+@mcp.tool()
+async def process_image_with_code(
+    sandbox_id: str,
+    code: str,
+    image_data: str = None,
+    image_url: str = None,
+    image_format: str = "PNG",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> str:
+    """
+    Process an image using Python code in the sandbox environment.
+
+    This tool allows you to load an image (from base64 data or URL) into the sandbox,
+    execute Python code to process it (resize, crop, rotate, filter, etc.),
+    and return the processed image as base64 data.
+
+    Args:
+        sandbox_id: The id of the sandbox to run the code in. To create a new sandbox, use tool `create_sandbox`.
+        code: Python code to execute for image processing. The code should work with a PIL Image object named 'image_1'.
+        image_data: Base64 encoded image data to load into the sandbox.
+        image_url: URL of image to download and load into the sandbox (alternative to image_data).
+        image_format: Output image format (PNG, JPEG, etc.) for the processed result.
+        timeout: Time in seconds before the execution times out.
+
+    Returns:
+        JSON string containing the execution result, including processed image data if successful.
+    """
+    if sandbox_id in INVALID_SANDBOX_IDS:
+        return f"[ERROR]: '{sandbox_id}' is not a valid sandbox_id. Please create a real sandbox first using the create_sandbox tool."
+
+    # Validate input parameters
+    if not image_data and not image_url:
+        return "[ERROR]: Either 'image_data' or 'image_url' must be provided."
+
+    if image_data and image_url:
+        return "[ERROR]: Provide either 'image_data' or 'image_url', not both."
+
+    try:
+        sandbox = Sandbox.connect(sandbox_id, api_key=E2B_API_KEY)
+    except Exception:
+        return f"[ERROR]: Failed to connect to sandbox {sandbox_id}. Make sure the sandbox is created and the sandbox_id is correct."
+
+    try:
+        sandbox.set_timeout(min(timeout, DEFAULT_TIMEOUT))
+
+        # Prepare initialization code for image loading
+        init_code = """
+from PIL import Image
+import base64
+from io import BytesIO
+import requests
+
+def pil_image_to_base64(img, format="PNG"):
+    buffer = BytesIO()
+    img.save(buffer, format=format)
+    buffer.seek(0)
+    img_bytes = buffer.read()
+    img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+    return img_base64
+
+def base64_to_pil_image(base64_string):
+    image_data = base64.b64decode(base64_string)
+    image = Image.open(BytesIO(image_data))
+    return image
+"""
+
+        # Load image based on input type
+        if image_data:
+            # Load from base64 data
+            init_code += f"""
+# Load image from base64 data
+_img_base64 = "{image_data}"
+image_1 = base64_to_pil_image(_img_base64)
+"""
+        elif image_url:
+            # Download and load from URL
+            init_code += f"""
+# Download and load image from URL
+response = requests.get("{image_url}")
+response.raise_for_status()
+image_1 = Image.open(BytesIO(response.content))
+"""
+
+        # Combine initialization and user code
+        full_code = init_code + "\n" + code + "\n"
+
+        # Execute the code
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                execution = sandbox.run_code(full_code, timeout=timeout)
+
+                if execution.error:
+                    if attempt == max_retries:
+                        error_details = str(execution.error)[:MAX_ERROR_LEN]
+                        return f"[ERROR]: Code execution failed after {max_retries} attempts: {error_details}"
+                    await asyncio.sleep(attempt**2)
+                    continue
+
+                # Get the stdout and stderr
+                stdout = execution.logs.stdout if execution.logs else ""
+                stderr = execution.logs.stderr if execution.logs else ""
+
+                # Check if image_1 was modified and convert back to base64
+                result_code = """
+try:
+    # Convert processed image back to base64
+    processed_image_b64 = pil_image_to_base64(image_1, format='PNG')
+    print(f"IMAGE_RESULT:{{processed_image_b64}}")
+except Exception as e:
+    print(f"IMAGE_CONVERSION_ERROR:{{str(e)}}")
+"""
+
+                result_execution = sandbox.run_code(result_code, timeout=30)
+                result_stdout = result_execution.logs.stdout if result_execution.logs else ""
+                result_stderr = result_execution.logs.stderr if result_execution.logs else ""
+
+                # Extract image result from stdout
+                processed_image_data = None
+                if "IMAGE_RESULT:" in result_stdout:
+                    # Extract base64 data between markers
+                    start_marker = "IMAGE_RESULT:"
+                    end_marker = "}"
+                    start_idx = result_stdout.find(start_marker)
+                    if start_idx != -1:
+                        end_idx = result_stdout.find(end_marker, start_idx + len(start_marker))
+                        if end_idx != -1:
+                            processed_image_data = result_stdout[start_idx + len(start_marker):end_idx + 1]
+
+                # Prepare response
+                response_data = {
+                    "success": processed_image_data is not None,
+                    "stdout": truncate_result(stdout),
+                    "stderr": truncate_result(stderr),
+                    "result_stdout": truncate_result(result_stdout),
+                    "result_stderr": truncate_result(result_stderr),
+                }
+
+                if processed_image_data:
+                    response_data["processed_image_data"] = processed_image_data
+                    response_data["image_format"] = image_format
+
+                return json.dumps(response_data, ensure_ascii=False)
+
+            except Exception as e:
+                if attempt == max_retries:
+                    error_details = str(e)[:MAX_ERROR_LEN]
+                    return f"[ERROR]: Failed to process image after {max_retries} attempts: {error_details}"
+                await asyncio.sleep(attempt**2)
+
+    except Exception as e:
+        error_details = str(e)[:MAX_ERROR_LEN]
+        return f"[ERROR]: Failed to process image: {error_details}"
+    finally:
+        # Set timeout before exit
+        try:
+            sandbox.set_timeout(DEFAULT_TIMEOUT)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

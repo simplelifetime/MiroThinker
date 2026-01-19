@@ -1,0 +1,31 @@
+# conf/agent/multimodal_search.yaml
+# Configuration for multimodal search agent with Seed-1.8 style tools
+# Focused on image search, visual search, and image processing capabilities
+# Single agent architecture without sub-agents
+defaults:
+  - default
+  - _self_
+
+main_agent:
+  tools:
+    - tool-python            # Image processing with code
+    - tool-image-search
+    - search_and_scrape_webpage
+    - jina_scrape_llm_summary
+  tool_blacklist:
+    - [ "tool-python", "run_command"]
+    - [ "tool-python", "run_python_code"]
+    - [ "tool-python", "upload_file_from_local_to_sandbox"]
+    - [ "tool-python", "download_file_from_internet_to_sandbox"]
+    - [ "tool-python", "download_file_from_sandbox_to_local"]
+    - [ "search_and_scrape_webpage", "sogou_search" ]
+  max_turns: 50  # Allow sufficient turns for complex multimodal tasks
+
+sub_agents:
+
+# Settings for context management
+keep_tool_result: -1
+context_compress_limit: 0  # Enable context compression (>0 = enabled, 0 = disabled).
+
+# Tool blacklist (optional - remove any tools you don't want to use)
+

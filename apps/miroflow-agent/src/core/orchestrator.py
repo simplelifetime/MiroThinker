@@ -9,8 +9,10 @@ by coordinating between the main agent, sub-agents, and various tools.
 """
 
 import asyncio
+import base64
 import gc
 import logging
+import os
 import time
 import uuid
 from collections import defaultdict
@@ -37,6 +39,46 @@ from .stream_handler import StreamHandler
 from .tool_executor import ToolExecutor
 
 logger = logging.getLogger(__name__)
+
+
+def _encode_image_to_base64(image_path: str) -> str:
+    """
+    Encode an image file to base64 string.
+
+    Args:
+        image_path: Path to the image file
+
+    Returns:
+        Base64 encoded string of the image
+    """
+    try:
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode('utf-8')
+    except Exception as e:
+        logger.warning(f"Failed to encode image {image_path}: {e}")
+        return ""
+
+
+def _get_image_mime_type(image_path: str) -> str:
+    """
+    Get MIME type for image file based on extension.
+
+    Args:
+        image_path: Path to the image file
+
+    Returns:
+        MIME type string
+    """
+    _, ext = os.path.splitext(image_path)
+    ext = ext.lower()
+    mime_types = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+    }
+    return mime_types.get(ext, 'image/jpeg')
 
 
 # =============================================================================
@@ -126,6 +168,9 @@ class Orchestrator:
         self.stream_queue = stream_queue
         self.tool_definitions = tool_definitions
         self.sub_agent_tool_definitions = sub_agent_tool_definitions
+        
+        # Store image context for visual search
+        self.image_context = {}
 
         # Initialize sub-agent tool list function
         self._list_sub_agent_tools = None
@@ -156,6 +201,8 @@ class Orchestrator:
             output_formatter=output_formatter,
             task_log=task_log,
             stream_handler=self.stream,
+            image_context=self.image_context,
+            orchestrator_image_context=self.image_context,
             max_consecutive_rollbacks=DEFAULT_MAX_CONSECUTIVE_ROLLBACKS,
         )
         self.answer_generator = AnswerGenerator(
@@ -734,7 +781,7 @@ class Orchestrator:
         return final_answer_text
 
     async def run_main_agent(
-        self, task_description, task_file_name=None, task_id="default_task"
+        self, task_description, task_file_name=None, task_id="default_task", image_urls=None
     ):
         """
         Execute the main end-to-end task.
@@ -743,6 +790,7 @@ class Orchestrator:
             task_description: Description of the task to execute
             task_file_name: Optional file associated with the task
             task_id: Unique identifier for the task
+            image_urls: Optional list of image URLs or local file paths for multimodal tasks
 
         Returns:
             Tuple of (final_summary, final_boxed_answer, failure_experience_summary)
@@ -757,12 +805,64 @@ class Orchestrator:
             self.task_log.log_step(
                 "info", "Main Agent", f"Associated file: {task_file_name}"
             )
+        
+        # Store image URLs in context for visual search tool
+        if image_urls:
+            for idx, url in enumerate(image_urls):
+                self.image_context[f"<image: {idx}>"] = url
+            self.task_log.log_step(
+                "info", "Main Agent", f"Image URLs provided: {len(image_urls)}"
+            )
 
         # Process input
         initial_user_content, processed_task_desc = process_input(
             task_description, task_file_name
         )
-        message_history = [{"role": "user", "content": initial_user_content}]
+
+        # Build user message with multimodal content if images are provided
+        if image_urls:
+            # Create multimodal message content
+            message_content = []
+
+            # Add images first
+            for idx, image_url in enumerate(image_urls):
+                if os.path.exists(image_url):  # Local file path
+                    base64_image = _encode_image_to_base64(image_url)
+                    if base64_image:
+                        mime_type = _get_image_mime_type(image_url)
+                        message_content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{base64_image}"
+                            }
+                        })
+                        # Store mapping from base64 data to original path for log compression
+                        self.task_log.image_path_mapping[base64_image] = image_url
+                        self.task_log.log_step(
+                            "info", "Main Agent",
+                            f"Added image {idx} to multimodal message (local file: {image_url})"
+                        )
+                else:
+                    # Assume it's already a URL
+                    message_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": image_url}
+                    })
+                    self.task_log.log_step(
+                        "info", "Main Agent",
+                        f"Added image {idx} to multimodal message (URL: {image_url})"
+                    )
+
+            # Add text content
+            message_content.append({
+                "type": "text",
+                "text": initial_user_content
+            })
+
+            message_history = [{"role": "user", "content": message_content}]
+        else:
+            # Fallback to text-only message for backward compatibility
+            message_history = [{"role": "user", "content": initial_user_content}]
 
         # Record initial user input
         user_input = processed_task_desc

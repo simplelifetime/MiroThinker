@@ -1,0 +1,1 @@
+uv run python main.py llm=gpt-5 agent=multimodal_search
