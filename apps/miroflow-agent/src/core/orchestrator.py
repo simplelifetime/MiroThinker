@@ -759,13 +759,13 @@ class Orchestrator:
             )
 
         # Process input
-        initial_user_content, processed_task_desc = process_input(
+        updated_task_description, initial_user_content = process_input(
             task_description, task_file_name
         )
         message_history = [{"role": "user", "content": initial_user_content}]
 
         # Record initial user input
-        user_input = processed_task_desc
+        user_input = updated_task_description
         if task_file_name:
             user_input += f"\n[Attached file: {task_file_name}]"
 

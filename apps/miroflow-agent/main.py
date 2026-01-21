@@ -29,8 +29,8 @@ async def amain(cfg: DictConfig) -> None:
 
     # Define task parameters
     task_id = "task_example"
-    task_description = "What is the title of today's arxiv paper in computer science?"
-    task_file_name = ""
+    task_description = "Please answer the following question and also provide your problem-solving roadmap. Question: There is an emperor who is closely related to the building in the picture. A surviving, elongated golden artifact related to this emperor is housed in the Henan Museum. What is the character in the bottom-right corner of this artifact?"
+    task_file_name = "/home/liuzikang/MM-BrowseComp/MMBC_images/7.png"
 
     # Execute task using the pipeline
     final_summary, final_boxed_answer, log_file_path, _ = await execute_task_pipeline(

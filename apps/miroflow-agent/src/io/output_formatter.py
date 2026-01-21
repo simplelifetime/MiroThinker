@@ -3,8 +3,9 @@
 
 """Output formatting utilities for agent responses."""
 
+import json
 import re
-from typing import Tuple
+from typing import Tuple, Union
 
 from ..utils.prompt_utils import FORMAT_ERROR_MESSAGE
 
@@ -92,19 +93,24 @@ class OutputFormatter:
         black_list = ["?", "??", "???", "？", "……", "…", "...", "unknown", None]
         return last_result.strip() if last_result not in black_list else ""
 
-    def format_tool_result_for_user(self, tool_call_execution_result: dict) -> dict:
+    def format_tool_result_for_user(
+        self, tool_call_execution_result: dict
+    ) -> Union[dict, list]:
         """
         Format tool execution results to be fed back to LLM as user messages.
 
         Only includes necessary information (results or errors). Long results
         are truncated to TOOL_RESULT_MAX_LENGTH to prevent context overflow.
 
+        For image search results, returns a multi-modal format with base64 images.
+
         Args:
             tool_call_execution_result: Dict containing server_name, tool_name,
                 and either 'result' or 'error'.
 
         Returns:
-            Dict with 'type' and 'text' keys suitable for LLM message content.
+            Dict with 'type' and 'text' keys, or a list containing mixed
+            content (text + images) for multi-modal models.
         """
         server_name = tool_call_execution_result["server_name"]
         tool_name = tool_call_execution_result["tool_name"]
@@ -112,16 +118,121 @@ class OutputFormatter:
         if "error" in tool_call_execution_result:
             # Provide concise error information to LLM
             content = f"Tool call to {tool_name} on {server_name} failed. Error: {tool_call_execution_result['error']}"
+            return {"type": "text", "text": content}
         elif "result" in tool_call_execution_result:
+            result = tool_call_execution_result["result"]
+
+            # Check if this is an image search result with base64 data
+            if tool_name in ["image_search", "visual_search"]:
+                try:
+                    # Try to parse as JSON
+                    if isinstance(result, str):
+                        data = json.loads(result)
+                    else:
+                        data = result
+
+                    # Check if this contains images with base64 data
+                    if "images" in data and isinstance(data["images"], list):
+                        return self._format_image_search_result(
+                            data, tool_name, server_name
+                        )
+                except (json.JSONDecodeError, KeyError):
+                    pass  # Fall through to regular text formatting
+
             # Provide the original output result of the tool
-            content = tool_call_execution_result["result"]
+            content = result
             # Truncate overly long results to prevent context overflow
             if len(content) > TOOL_RESULT_MAX_LENGTH:
                 content = content[:TOOL_RESULT_MAX_LENGTH] + "\n... [Result truncated]"
+            return {"type": "text", "text": content}
         else:
             content = f"Tool call to {tool_name} on {server_name} completed, but produced no specific output or result."
+            return {"type": "text", "text": content}
 
-        return {"type": "text", "text": content}
+    def _format_image_search_result(
+        self, data: dict, tool_name: str, server_name: str
+    ) -> list:
+        """
+        Format image search results as multi-modal content.
+
+        Creates a list with text description and base64-encoded images
+        for direct visual processing by multi-modal models.
+
+        Args:
+            data: Parsed JSON response from image search
+            tool_name: Name of the tool that was called
+            server_name: Name of the MCP server
+
+        Returns:
+            List of content items (text + images) in OpenAI API format
+        """
+        content_items = []
+        images = data.get("images", [])
+
+        # Add text summary
+        search_type = (
+            "Visual search" if tool_name == "visual_search" else "Image search"
+        )
+        text_summary = f"{search_type} completed on {server_name}. Found {len(images)} images.\n\n"
+
+        # Add text descriptions for images (limited to avoid context explosion)
+        for idx, img in enumerate(images[:10]):  # Limit text descriptions to 10
+            title = img.get("title", "")
+            link = img.get("link", "")
+            image_url = img.get("imageUrl", "")
+
+            parts = [f"{idx + 1}. "]
+            if title:
+                parts.append(f"Title: {title}")
+            if image_url:
+                parts.append(f"Image URL: {image_url}")
+            if link:
+                parts.append(f"Source: {link}")
+
+            text_summary += " | ".join(parts) + "\n"
+
+        if len(images) > 10:
+            text_summary += f"\n... and {len(images) - 10} more images.\n"
+
+        # Add note about which images have base64 data
+        base64_count = sum(1 for img in images if "base64_data" in img)
+        if base64_count > 0:
+            text_summary += (
+                f"\nNote: The first {base64_count} images are included below "
+                "for direct visual analysis."
+            )
+
+        content_items.append({"type": "text", "text": text_summary})
+
+        # Add base64 images (first 5)
+        for idx, img in enumerate(images[:5]):
+            if "base64_data" in img:
+                # Create image content with metadata description
+                image_url = img.get("imageUrl", "N/A")
+                title = img.get("title", "")
+                link = img.get("link", "")
+
+                # Build text description
+                desc_parts = [f"Image {idx + 1}"]
+                if image_url and image_url != "N/A":
+                    desc_parts.append(f"Image URL: {image_url}")
+                if title:
+                    desc_parts.append(f"Title: {title}")
+                if link:
+                    desc_parts.append(f"Webpage URL: {link}")
+
+                text_description = ", ".join(desc_parts)
+
+                # Add image with text description
+                content_items.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": img["base64_data"]},
+                    }
+                )
+                content_items.append({"type": "text", "text": text_description})
+
+        return content_items
 
     def format_final_summary_and_log(
         self, final_answer_text: str, client=None

@@ -646,6 +646,232 @@ async def search_archived_webpage(url: str, year: int, month: int, day: int) -> 
 
 
 @mcp.tool()
+async def scholar_search(
+    q: str,
+    gl: str = "us",
+    hl: str = "en",
+    num: int = 10,
+    page: int = 1,
+) -> str:
+    """Perform academic searches via Google Scholar through Serper API.
+
+    Retrieve scholarly literature including articles, theses, books,
+    abstracts, and court opinions from academic publishers, professional
+    societies, online repositories, and universities.
+
+    Args:
+        q: Search query string for academic literature.
+        gl: Country context for search (e.g., 'us' for United States, 'cn' for China, 'uk' for United Kingdom). Influences regional results priority. Default is 'us'.
+        hl: Google interface language (e.g., 'en' for English, 'zh' for Chinese, 'es' for Spanish). Affects snippet language preference. Default is 'en'.
+        num: The number of results to return (default: 10).
+        page: The page number of results to return (default: 1).
+
+    Returns:
+        The scholarly search results.
+    """
+    if SERPER_API_KEY == "":
+        return (
+            "[ERROR]: SERPER_API_KEY is not set, scholar_search tool is not available."
+        )
+
+    tool_name = "scholar_search"
+    arguments = {
+        "q": q,
+        "gl": gl,
+        "hl": hl,
+        "num": num,
+        "page": page,
+    }
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "miroflow_tools.mcp_servers.serper_mcp_server"],
+        env={"SERPER_API_KEY": SERPER_API_KEY, "SERPER_BASE_URL": SERPER_BASE_URL},
+    )
+    result_content = ""
+
+    retry_count = 0
+    max_retries = 3
+
+    while retry_count < max_retries:
+        try:
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(
+                    read, write, sampling_callback=None
+                ) as session:
+                    await session.initialize()
+                    tool_result = await session.call_tool(
+                        tool_name, arguments=arguments
+                    )
+                    result_content = (
+                        tool_result.content[-1].text if tool_result.content else ""
+                    )
+                    assert (
+                        result_content is not None and result_content.strip() != ""
+                    ), "Empty result from scholar_search tool, please try again."
+                    return result_content  # Success, exit retry loop
+        except Exception as error:
+            retry_count += 1
+            if retry_count >= max_retries:
+                return f"[ERROR]: scholar_search tool execution failed after {max_retries} attempts: {str(error)}"
+            # Wait before retrying
+            await asyncio.sleep(min(2**retry_count, 60))
+
+    return "[ERROR]: Unknown error occurred in scholar_search tool, please try again."
+
+
+@mcp.tool()
+async def image_search(
+    q: str,
+    gl: str = "us",
+    hl: str = "en",
+    location: str = None,
+    num: int = 5,
+    page: int = 1,
+) -> str:
+    """Perform image searches via Serper API and retrieve visual results.
+
+    Retrieve image search results including thumbnails, titles, and source URLs.
+
+    Args:
+        q: Search query string for images.
+        gl: Country context for search (e.g., 'us' for United States, 'cn' for China, 'uk' for United Kingdom). Influences regional results priority. Default is 'us'.
+        hl: Google interface language (e.g., 'en' for English, 'zh' for Chinese, 'es' for Spanish). Affects snippet language preference. Default is 'en'.
+        location: City-level location for search results (e.g., 'SoHo, New York, United States', 'California, United States').
+        num: The number of results to return (default: 5).
+        page: The page number of results to return (default: 1).
+
+    Returns:
+        The image search results.
+    """
+    if SERPER_API_KEY == "":
+        return (
+            "[ERROR]: SERPER_API_KEY is not set, image_search tool is not available."
+        )
+
+    tool_name = "image_search"
+    arguments = {
+        "q": q,
+        "gl": gl,
+        "hl": hl,
+        "num": num,
+        "page": page,
+    }
+    if location:
+        arguments["location"] = location
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "miroflow_tools.mcp_servers.serper_mcp_server"],
+        env={"SERPER_API_KEY": SERPER_API_KEY, "SERPER_BASE_URL": SERPER_BASE_URL},
+    )
+    result_content = ""
+
+    retry_count = 0
+    max_retries = 3
+
+    while retry_count < max_retries:
+        try:
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(
+                    read, write, sampling_callback=None
+                ) as session:
+                    await session.initialize()
+                    tool_result = await session.call_tool(
+                        tool_name, arguments=arguments
+                    )
+                    result_content = (
+                        tool_result.content[-1].text if tool_result.content else ""
+                    )
+                    assert (
+                        result_content is not None and result_content.strip() != ""
+                    ), "Empty result from image_search tool, please try again."
+                    return result_content  # Success, exit retry loop
+        except Exception as error:
+            retry_count += 1
+            if retry_count >= max_retries:
+                return f"[ERROR]: image_search tool execution failed after {max_retries} attempts: {str(error)}"
+            # Wait before retrying
+            await asyncio.sleep(min(2**retry_count, 60))
+
+    return "[ERROR]: Unknown error occurred in image_search tool, please try again."
+
+
+@mcp.tool()
+async def visual_search(
+    image_url: str,
+    gl: str = "us",
+    hl: str = "en",
+    location: str = None,
+    num: int = 5,
+    page: int = 1,
+) -> str:
+    """Perform visual searches via Serper Lens API to find similar images.
+
+    Given an image URL, retrieve visually similar images from across the web.
+
+    Args:
+        image_url: URL of the image to search with.
+        gl: Country context for search (e.g., 'us' for United States, 'cn' for China, 'uk' for United Kingdom). Influences regional results priority. Default is 'us'.
+        hl: Google interface language (e.g., 'en' for English, 'zh' for Chinese, 'es' for Spanish). Affects snippet language preference. Default is 'en'.
+        location: City-level location for search results (e.g., 'SoHo, New York, United States', 'California, United States').
+        num: The number of results to return (default: 5).
+        page: The page number of results to return (default: 1).
+
+    Returns:
+        The visually similar image search results.
+    """
+    if SERPER_API_KEY == "":
+        return (
+            "[ERROR]: SERPER_API_KEY is not set, visual_search tool is not available."
+        )
+
+    tool_name = "visual_search"
+    arguments = {
+        "image_url": image_url,
+        "gl": gl,
+        "hl": hl,
+        "num": num,
+        "page": page,
+    }
+    if location:
+        arguments["location"] = location
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "miroflow_tools.mcp_servers.serper_mcp_server"],
+        env={"SERPER_API_KEY": SERPER_API_KEY, "SERPER_BASE_URL": SERPER_BASE_URL},
+    )
+    result_content = ""
+
+    retry_count = 0
+    max_retries = 3
+
+    while retry_count < max_retries:
+        try:
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(
+                    read, write, sampling_callback=None
+                ) as session:
+                    await session.initialize()
+                    tool_result = await session.call_tool(
+                        tool_name, arguments=arguments
+                    )
+                    result_content = (
+                        tool_result.content[-1].text if tool_result.content else ""
+                    )
+                    assert (
+                        result_content is not None and result_content.strip() != ""
+                    ), "Empty result from visual_search tool, please try again."
+                    return result_content  # Success, exit retry loop
+        except Exception as error:
+            retry_count += 1
+            if retry_count >= max_retries:
+                return f"[ERROR]: visual_search tool execution failed after {max_retries} attempts: {str(error)}"
+            # Wait before retrying
+            await asyncio.sleep(min(2**retry_count, 60))
+
+    return "[ERROR]: Unknown error occurred in visual_search tool, please try again."
+
+
+@mcp.tool()
 async def scrape_website(url: str) -> str:
     """This tool is used to scrape a website for its content. Search engines are not supported by this tool. This tool can also be used to get YouTube video non-visual information (however, it may be incomplete), such as video subtitles, titles, descriptions, key moments, etc.
 

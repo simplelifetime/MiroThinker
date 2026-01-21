@@ -338,22 +338,54 @@ class OpenAIClient(BaseClient):
     def update_message_history(
         self, message_history: List[Dict], all_tool_results_content_with_id: List[Tuple]
     ) -> List[Dict]:
-        """Update message history with tool calls data (llm client specific)"""
+        """
+        Update message history with tool calls data (llm client specific).
 
-        merged_text = "\n".join(
-            [
-                item[1]["text"]
-                for item in all_tool_results_content_with_id
-                if item[1]["type"] == "text"
-            ]
+        Handles both text-only and multi-modal content formats.
+        """
+        # Collect all content items
+        content_items = []
+
+        for item in all_tool_results_content_with_id:
+            tool_result_content = item[1]
+
+            # Handle both dict and list formats
+            if isinstance(tool_result_content, dict):
+                # Text-only format
+                if tool_result_content.get("type") == "text":
+                    content_items.append(tool_result_content)
+            elif isinstance(tool_result_content, list):
+                # Multi-modal format (list of content items)
+                content_items.extend(tool_result_content)
+
+        # Check if we have any image content
+        has_images = any(
+            item.get("type") == "image_url" for item in content_items
         )
 
-        message_history.append(
-            {
-                "role": "user",
-                "content": merged_text,
-            }
-        )
+        if has_images:
+            # Multi-modal format: keep as list
+            message_history.append(
+                {
+                    "role": "user",
+                    "content": content_items,
+                }
+            )
+        else:
+            # Text-only format: merge into single string
+            merged_text = "\n".join(
+                [
+                    item["text"]
+                    for item in content_items
+                    if item.get("type") == "text"
+                ]
+            )
+            message_history.append(
+                {
+                    "role": "user",
+                    "content": merged_text,
+                }
+            )
 
         return message_history
 

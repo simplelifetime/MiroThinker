@@ -46,6 +46,15 @@ from openpyxl.utils import get_column_letter
 # Ensure .env file is loaded
 load_dotenv()
 
+# Import image utilities for multi-modal support
+from ..utils.image_utils import (
+    encode_image_to_base64,
+    format_image_for_context,
+    generate_simple_image_caption,
+    get_image_mime_type,
+    OSSUploader,
+)
+
 # File extension constants for different media types
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
 AUDIO_EXTENSIONS = {"wav", "mp3", "m4a"}
@@ -435,23 +444,29 @@ Please provide a concise summary of the relevant information from the video that
         return ""
 
 
-def process_input(task_description: str, task_file_name: str) -> Tuple[str, str]:
+def process_input(task_description: str, task_file_name: str) -> Tuple[str, Union[str, list]]:
     """
     Process user input and associated files.
 
     Extracts content from the task file (if provided) and appends it to the
     task description in a format suitable for the LLM.
 
+    For image files, returns a list format compatible with multi-modal models
+    that includes both the image (base64) and text description.
+
     Args:
         task_description: The original task description
         task_file_name: Path to an associated file, or empty string if none
 
     Returns:
-        Tuple of (updated_task_description, updated_task_description)
-        Both values are the same - the task description with file content appended
+        Tuple of (updated_task_description, initial_user_content)
+        - updated_task_description: Task description with file content appended
+        - initial_user_content: Either a string (for non-image files) or a list
+          (for image files) containing mixed content for multi-modal models
     """
     updated_task_description = task_description
     file_content_section = ""  # Collect file content to append at the end
+    initial_user_content = None  # Will be set for images to support multi-modal
 
     if task_file_name:
         try:
@@ -459,22 +474,51 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, str]
             parsing_result = None
 
             if file_extension in IMAGE_EXTENSIONS:
-                # Generate unconditional image caption
-                caption = _generate_image_caption(task_file_name)
+                # Process image for multi-modal support
+                # Encode image to base64
+                image_base64 = encode_image_to_base64(task_file_name)
+                if not image_base64:
+                    print(f"Error: Failed to encode image {task_file_name}")
+                    image_base64 = ""
 
-                # Extract task-relevant information directly from the image
-                relevant_info = _extract_task_relevant_info_from_image(
+                # Get MIME type
+                mime_type = get_image_mime_type(task_file_name)
+                image_base64_with_mime = f"data:{mime_type};base64,{image_base64}"
+
+                # Upload to OSS to get URL
+                oss_uploader = OSSUploader()
+                image_url = oss_uploader.upload(task_file_name, byte=False)
+
+                # Generate simple caption
+                description = generate_simple_image_caption(
                     task_file_name, task_description
                 )
 
-                # Format as Markdown
-                file_content_section += f"\n\nNote: An image file '{task_file_name}' is associated with this task. The content has been extracted as a detailed caption below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
-                file_content_section += f"## Image Content\nFile: {task_file_name}\n\n"
-                file_content_section += f"> {caption}\n\n"
+                # Format for multi-modal context
+                image_content, text_description = format_image_for_context(
+                    image_base64_with_mime, image_url, description
+                )
 
-                if relevant_info:
-                    file_content_section += "Task-Relevant Information:\n\n"
-                    file_content_section += f"{relevant_info}\n\n"
+                # Create multi-modal content list
+                # This format is compatible with OpenAI API and similar interfaces
+                initial_user_content = [
+                    {
+                        "type": "text",
+                        "text": f"{task_description}\n\n"
+                        f"Note: An image file '{task_file_name}' is associated with this task. "
+                        f"The image is included below for direct visual analysis. "
+                        f"You may use available tools to process its content if necessary.\n\n"
+                        f"{text_description}",
+                    },
+                    image_content,
+                ]
+
+                # Also update updated_task_description for backward compatibility
+                file_content_section += f"\n\nNote: An image file '{task_file_name}' is associated with this task. "
+                file_content_section += f"The image has been included in the context for direct visual analysis.\n\n"
+                file_content_section += f"## Image Content\n"
+                file_content_section += f"File: {task_file_name}\n"
+                file_content_section += f"{text_description}\n\n"
 
             elif file_extension == "py":
                 # Python files - read directly
@@ -648,7 +692,12 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, str]
     updated_task_description += file_content_section
     updated_task_description = updated_task_description.strip()
 
-    return updated_task_description, updated_task_description
+    # Return initial_user_content if it's an image (multi-modal format)
+    # Otherwise return the text format
+    if initial_user_content is not None:
+        return updated_task_description, initial_user_content
+    else:
+        return updated_task_description, updated_task_description
 
 
 class _CustomMarkdownify(markdownify.MarkdownConverter):

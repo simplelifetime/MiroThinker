@@ -374,6 +374,24 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig):
             }
         )
 
+    if (
+        agent_cfg.get("tools", None) is not None
+        and "tool-image-processing" in agent_cfg["tools"]
+    ):
+        configs.append(
+            {
+                "name": "tool-image-processing",
+                "params": StdioServerParameters(
+                    command=sys.executable,
+                    args=[
+                        "-m",
+                        "miroflow_tools.mcp_servers.image_processing_mcp_server",
+                    ],
+                    env={},
+                ),
+            }
+        )
+
     blacklist = set()
     for black_list_item in agent_cfg.get("tool_blacklist", []):
         blacklist.add((black_list_item[0], black_list_item[1]))

@@ -282,6 +282,9 @@ class TaskLog:
         if isinstance(obj, Path):
             return str(obj)
         elif isinstance(obj, dict):
+            # Check if this is a message with content that might contain images
+            if "role" in obj and "content" in obj:
+                return self._serialize_message(obj)
             return {k: self.serialize_for_json(v) for k, v in obj.items()}
         elif isinstance(obj, list):
             return [self.serialize_for_json(item) for item in obj]
@@ -289,6 +292,57 @@ class TaskLog:
             return self.serialize_for_json(obj.__dict__)
         else:
             return obj
+
+    def _serialize_message(self, message: dict) -> dict:
+        """
+        Serialize a message, replacing base64 image data with placeholder.
+
+        Args:
+            message: A message dictionary with 'role' and 'content' fields
+
+        Returns:
+            Serialized message with base64 data replaced by "<image>"
+        """
+        result = {"role": message["role"]}
+        content = message["content"]
+
+        # Handle different content formats
+        if isinstance(content, list):
+            # Multi-modal content (list of content items)
+            serialized_content = []
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get("type") == "image_url":
+                        # Replace base64 image data with placeholder
+                        serialized_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": "<image>"}
+                        })
+                    elif item.get("type") == "text":
+                        # Keep text as is
+                        serialized_content.append(item)
+                    else:
+                        # Recursively serialize other types
+                        serialized_content.append(self.serialize_for_json(item))
+                else:
+                    serialized_content.append(self.serialize_for_json(item))
+            result["content"] = serialized_content
+        elif isinstance(content, str):
+            # Text-only content - check if it contains base64 data
+            if content.startswith("data:image") and ";base64," in content:
+                result["content"] = "<image>"
+            else:
+                result["content"] = content
+        else:
+            # Other formats - serialize normally
+            result["content"] = self.serialize_for_json(content)
+
+        # Copy any other fields
+        for key, value in message.items():
+            if key not in ("role", "content"):
+                result[key] = self.serialize_for_json(value)
+
+        return result
 
     def to_json(self) -> str:
         """
