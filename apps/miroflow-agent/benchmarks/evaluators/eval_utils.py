@@ -10,16 +10,26 @@ import warnings
 from typing import Any, Dict, Literal, Optional
 
 from dotenv import load_dotenv
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI, OpenAI, AzureOpenAI, AsyncAzureOpenAI
 from pydantic import BaseModel
 
 load_dotenv()
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
+OPENAI_API_KEY = os.environ.get("EVAL_OPENAI_API_KEY")
+OPENAI_BASE_URL = os.environ.get("EVAL_OPENAI_BASE_URL")
+EVAL_API_VERSION = os.environ.get("EVAL_API_VERSION")
+EVAL_MODEL = os.environ.get("EVAL_MODEL")
 
-evaluation_llm_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
-model_as_a_judge_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+
+
+# evaluation_llm_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+# model_as_a_judge_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+evaluation_llm_client = AsyncAzureOpenAI(api_key=OPENAI_API_KEY,
+    api_version=EVAL_API_VERSION,
+    azure_endpoint=OPENAI_BASE_URL,)
+model_as_a_judge_client = AzureOpenAI(api_key=OPENAI_API_KEY,
+    api_version=EVAL_API_VERSION,
+    azure_endpoint=OPENAI_BASE_URL,)
 
 
 # ================================================
@@ -127,7 +137,7 @@ async def verify_answer_simpleqa(
 
     try:
         llm_response = await evaluation_llm_client.chat.completions.create(
-            model="gpt-4.1-2025-04-14", messages=messages, max_completion_tokens=2
+            model=EVAL_MODEL, messages=messages, max_completion_tokens=2
         )
         content = llm_response.choices[0].message.content
         match = re.search(r"(A|B|C)", content)
