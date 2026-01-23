@@ -122,6 +122,35 @@ class OutputFormatter:
         elif "result" in tool_call_execution_result:
             result = tool_call_execution_result["result"]
 
+            # Check if this is a fetch_image result (multi-modal format)
+            if tool_name == "fetch_image":
+                try:
+                    # Parse JSON result
+                    if isinstance(result, str):
+                        data = json.loads(result)
+                    else:
+                        data = result
+
+                    # Check if this contains an error
+                    if isinstance(data, dict) and "error" in data:
+                        return {"type": "text", "text": f"Image download failed: {data['error']}"}
+
+                    # Check if this is a multi-modal content list
+                    if isinstance(data, list):
+                        # Validate the structure
+                        valid_content = True
+                        for item in data:
+                            if not isinstance(item, dict) or "type" not in item:
+                                valid_content = False
+                                break
+
+                        if valid_content:
+                            # Return the multi-modal content list directly
+                            return data
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    # If parsing fails, treat as regular text
+                    pass
+
             # Check if this is an image search result with base64 data
             if tool_name in ["image_search", "visual_search"]:
                 try:

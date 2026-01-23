@@ -310,7 +310,7 @@ def image_search(
     Tool to perform image searches via Serper API and retrieve visual results.
 
     Retrieve image search results including thumbnails, titles, and source URLs.
-    Images are downloaded and encoded as base64 for direct multi-modal processing.
+    Returns image metadata with URLs for reference, without downloading images.
 
     Args:
         q: Search query string for images
@@ -322,7 +322,7 @@ def image_search(
 
     Returns:
         Dictionary containing image search results and metadata.
-        The first 5 images include base64-encoded data for direct visual processing.
+        Images are returned with URLs and metadata, without base64 encoding.
     """
     # Check for API key
     if not SERPER_API_KEY:
@@ -372,10 +372,10 @@ def image_search(
         data = response.json()
         data = decode_http_urls_in_dict(data)
 
-        # Limit and process images: download and encode requested number of results
+        # Limit images to requested number (return metadata only, no download/encoding)
         requested_num = num if num is not None else 5
         if "images" in data and isinstance(data["images"], list):
-            data["images"] = download_and_encode_images(data["images"], max_images=requested_num, limit_results=True)
+            data["images"] = data["images"][:requested_num]
 
         return json.dumps(data, ensure_ascii=False)
 
@@ -399,7 +399,7 @@ def visual_search(
     Tool to perform visual searches via Serper Lens API to find similar images.
 
     Given an image URL, retrieve visually similar images from across the web.
-    Images are downloaded and encoded as base64 for direct multi-modal processing.
+    Returns image metadata with URLs for reference, without downloading images.
 
     Args:
         image_url: URL of the image to search with
@@ -411,7 +411,7 @@ def visual_search(
 
     Returns:
         Dictionary containing visually similar image search results and metadata.
-        The first 5 images include base64-encoded data for direct visual processing.
+        Images are returned with URLs and metadata, without base64 encoding.
     """
     # Check for API key
     if not SERPER_API_KEY:
@@ -477,9 +477,9 @@ def visual_search(
         if "organic" in data and isinstance(data["organic"], list):
             data["organic"] = data["organic"][:requested_num]
 
-        # Process images: download and encode requested number of results
+        # Limit images to requested number (return metadata only, no download/encoding)
         if "images" in data and isinstance(data["images"], list):
-            data["images"] = download_and_encode_images(data["images"], max_images=requested_num, limit_results=True)
+            data["images"] = data["images"][:requested_num]
 
         return json.dumps(data, ensure_ascii=False)
 

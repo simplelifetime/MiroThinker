@@ -9,16 +9,16 @@ defaults:
 
 main_agent:
   tools:
+    - tool-fetch-image
     - tool-google-search
-    - tool-python
+    - jina_scrape_llm_summary
   tool_blacklist:
     - [ "search_and_scrape_webpage", "sogou_search" ]
-    - [ "tool-python", "download_file_from_sandbox_to_local" ]
-  max_turns: 5  # Maximum number of turns for main agent execution
+  max_turns: 10  # Maximum number of turns for main agent execution
 
 sub_agents:
   # No sub-agents needed for this focused search agent
 
 # Settings for context management
-keep_tool_result: 2 # Keep all tool results (no limit)
+keep_tool_result: -1 # Keep all tool results (no limit)
 context_compress_limit: 0  # Disable context compression for better search accuracy
