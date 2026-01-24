@@ -18,7 +18,9 @@ import base64
 import io
 import os
 from typing import Optional, Tuple, Union
+from urllib.parse import urlparse
 
+import requests
 from fastmcp import FastMCP
 from PIL import Image, ImageDraw
 
@@ -28,6 +30,47 @@ mcp = FastMCP("image-processing-server")
 # Constants
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
 SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+
+
+def download_image_from_url(image_url: str, timeout: int = 30) -> Tuple[Optional[bytes], Optional[str]]:
+    """
+    Download image from URL and return bytes and error message.
+
+    Args:
+        image_url: URL of the image to download
+        timeout: Request timeout in seconds
+
+    Returns:
+        Tuple of (image_bytes, error_message)
+        - If successful: (bytes, None)
+        - If failed: (None, error_message)
+    """
+    try:
+        # Validate URL format
+        parsed_url = urlparse(image_url)
+        if not all([parsed_url.scheme, parsed_url.netloc]):
+            return None, f"Invalid URL format: {image_url}"
+
+        if parsed_url.scheme not in ['http', 'https']:
+            return None, f"Unsupported URL scheme: {parsed_url.scheme}. Only http and https are supported."
+
+        # Download image
+        response = requests.get(image_url, timeout=timeout, stream=True)
+        response.raise_for_status()
+
+        # Check file size
+        file_size = len(response.content)
+        if file_size > MAX_IMAGE_SIZE:
+            return None, f"[ERROR]: Downloaded image size ({file_size / (1024 * 1024):.2f}MB) exceeds maximum allowed size (20MB)"
+
+        return response.content, None
+
+    except requests.exceptions.Timeout:
+        return None, f"[ERROR]: Download timeout after {timeout} seconds"
+    except requests.exceptions.RequestException as e:
+        return None, f"[ERROR]: Download failed: {str(e)}"
+    except Exception as e:
+        return None, f"[ERROR]: Unexpected error: {str(e)}"
 
 
 def encode_image_to_base64(image: Image.Image, format: str = "PNG") -> str:
@@ -52,52 +95,33 @@ def encode_image_to_base64(image: Image.Image, format: str = "PNG") -> str:
     return f"data:{mime_type};base64,{base64_str}"
 
 
-def load_image_from_path_or_base64(
-    image_input: str,
-) -> Tuple[Optional[Image.Image], Optional[str]]:
+def load_image_from_url(image_url: str) -> Tuple[Optional[Image.Image], Optional[str]]:
     """
-    Load an image from file path or base64 string.
+    Load an image from URL.
 
     Args:
-        image_input: Either a file path or a base64 data URI
+        image_url: URL of the image to load
 
     Returns:
         Tuple of (PIL Image, error_message). Image is None if error occurs.
     """
     try:
-        # Check if it's a base64 data URI
-        if image_input.startswith("data:image"):
-            # Parse base64 data
-            header, base64_data = image_input.split(",", 1)
-            image_bytes = base64.b64decode(base64_data)
-            image = Image.open(io.BytesIO(image_bytes))
-            return image, None
+        # Download image from URL
+        image_bytes, error = download_image_from_url(image_url)
+        if error:
+            return None, error
 
-        # Otherwise, treat as file path
-        elif os.path.exists(image_input):
-            # Validate file size
-            file_size = os.path.getsize(image_input)
-            if file_size > MAX_IMAGE_SIZE:
-                return None, f"[ERROR]: File size ({file_size / (1024 * 1024):.2f}MB) exceeds maximum allowed size (20MB)"
-
-            # Validate format
-            _, ext = os.path.splitext(image_input)
-            if ext.lower() not in SUPPORTED_FORMATS:
-                return None, f"[ERROR]: Unsupported image format: {ext}. Supported formats: {', '.join(SUPPORTED_FORMATS)}"
-
-            image = Image.open(image_input)
-            return image, None
-
-        else:
-            return None, f"[ERROR]: File not found: {image_input}"
+        # Load image from bytes
+        image = Image.open(io.BytesIO(image_bytes))
+        return image, None
 
     except Exception as e:
-        return None, f"[ERROR]: Failed to load image: {str(e)}"
+        return None, f"[ERROR]: Failed to load image from URL: {str(e)}"
 
 
 @mcp.tool()
 async def zoom_in(
-    image_input: str,
+    image_url: str,
     x: int,
     y: int,
     width: int,
@@ -109,8 +133,12 @@ async def zoom_in(
     This tool extracts and enlarges a specific region of an image,
     useful for focusing on details or areas of interest.
 
+    IMPORTANT: This tool can ONLY process images that have already been loaded into
+    the agent's context (through search results, fetch_image, or other image tools).
+    Do NOT use this tool on images that the agent has not yet viewed.
+
     Args:
-        image_input: Either a local file path (e.g., '/path/to/image.jpg') or a base64 data URI (e.g., 'data:image/png;base64,...')
+        image_url: URL of the image to process (must start with http:// or https://)
         x: X coordinate of the top-left corner of the region to zoom (in pixels)
         y: Y coordinate of the top-left corner of the region to zoom (in pixels)
         width: Width of the region to zoom (in pixels)
@@ -119,9 +147,12 @@ async def zoom_in(
 
     Returns:
         Base64-encoded zoomed image with data URI prefix, or error message if failed
+
+    Example:
+        zoom_in(image_url="https://example.com/image.jpg", x=100, y=100, width=200, height=200)
     """
-    # Load image
-    image, error = load_image_from_path_or_base64(image_input)
+    # Load image from URL
+    image, error = load_image_from_url(image_url)
     if error:
         return error
 
@@ -150,24 +181,31 @@ async def zoom_in(
 
 @mcp.tool()
 async def rotate(
-    image_input: str,
+    image_url: str,
     angle: float,
     expand: bool = False,
     output_format: str = "PNG",
 ) -> str:
     """Rotate an image by a specified angle.
 
+    IMPORTANT: This tool can ONLY process images that have already been loaded into
+    the agent's context (through search results, fetch_image, or other image tools).
+    Do NOT use this tool on images that the agent has not yet viewed.
+
     Args:
-        image_input: Either a local file path (e.g., '/path/to/image.jpg') or a base64 data URI (e.g., 'data:image/png;base64,...')
+        image_url: URL of the image to process (must start with http:// or https://)
         angle: Rotation angle in degrees (counter-clockwise). Positive values rotate counter-clockwise, negative values rotate clockwise
         expand: If True, expands the output image to fit the entire rotated image. If False, keeps the original dimensions (default: False)
         output_format: Output image format ('PNG', 'JPEG', etc.). Default is 'PNG'
 
     Returns:
         Base64-encoded rotated image with data URI prefix, or error message if failed
+
+    Example:
+        rotate(image_url="https://example.com/image.jpg", angle=45, expand=True)
     """
-    # Load image
-    image, error = load_image_from_path_or_base64(image_input)
+    # Load image from URL
+    image, error = load_image_from_url(image_url)
     if error:
         return error
 
@@ -190,22 +228,29 @@ async def rotate(
 
 @mcp.tool()
 async def flip(
-    image_input: str,
+    image_url: str,
     direction: str,
     output_format: str = "PNG",
 ) -> str:
     """Flip an image horizontally or vertically.
 
+    IMPORTANT: This tool can ONLY process images that have already been loaded into
+    the agent's context (through search results, fetch_image, or other image tools).
+    Do NOT use this tool on images that the agent has not yet viewed.
+
     Args:
-        image_input: Either a local file path (e.g., '/path/to/image.jpg') or a base64 data URI (e.g., 'data:image/png;base64,...')
+        image_url: URL of the image to process (must start with http:// or https://)
         direction: Flip direction - 'horizontal' for left-right flip, 'vertical' for top-bottom flip
         output_format: Output image format ('PNG', 'JPEG', etc.). Default is 'PNG'
 
     Returns:
         Base64-encoded flipped image with data URI prefix, or error message if failed
+
+    Example:
+        flip(image_url="https://example.com/image.jpg", direction="horizontal")
     """
-    # Load image
-    image, error = load_image_from_path_or_base64(image_input)
+    # Load image from URL
+    image, error = load_image_from_url(image_url)
     if error:
         return error
 
@@ -234,7 +279,7 @@ async def flip(
 
 @mcp.tool()
 async def put_box(
-    image_input: str,
+    image_url: str,
     x1: int,
     y1: int,
     x2: int,
@@ -249,8 +294,12 @@ async def put_box(
     This tool draws a rectangle on the image to highlight a specific region,
     useful for marking objects or areas of interest.
 
+    IMPORTANT: This tool can ONLY process images that have already been loaded into
+    the agent's context (through search results, fetch_image, or other image tools).
+    Do NOT use this tool on images that the agent has not yet viewed.
+
     Args:
-        image_input: Either a local file path (e.g., '/path/to/image.jpg') or a base64 data URI (e.g., 'data:image/png;base64,...')
+        image_url: URL of the image to process (must start with http:// or https://)
         x1: X coordinate of the top-left corner of the box (in pixels)
         y1: Y coordinate of the top-left corner of the box (in pixels)
         x2: X coordinate of the bottom-right corner of the box (in pixels)
@@ -262,9 +311,12 @@ async def put_box(
 
     Returns:
         Base64-encoded annotated image with data URI prefix, or error message if failed
+
+    Example:
+        put_box(image_url="https://example.com/image.jpg", x1=50, y1=50, x2=150, y2=150, color="red", label="object 1")
     """
-    # Load image
-    image, error = load_image_from_path_or_base64(image_input)
+    # Load image from URL
+    image, error = load_image_from_url(image_url)
     if error:
         return error
 
@@ -317,20 +369,27 @@ async def put_box(
 
 
 @mcp.tool()
-async def get_image_info(image_input: str) -> str:
+async def get_image_info(image_url: str) -> str:
     """Get basic information about an image.
 
     This tool returns metadata about an image including its dimensions,
     format, and mode (RGB, RGBA, etc.).
 
+    IMPORTANT: This tool can ONLY process images that have already been loaded into
+    the agent's context (through search results, fetch_image, or other image tools).
+    Do NOT use this tool on images that the agent has not yet viewed.
+
     Args:
-        image_input: Either a local file path (e.g., '/path/to/image.jpg') or a base64 data URI (e.g., 'data:image/png;base64,...')
+        image_url: URL of the image to analyze (must start with http:// or https://)
 
     Returns:
         String with image information (dimensions, format, mode), or error message if failed
+
+    Example:
+        get_image_info(image_url="https://example.com/image.jpg")
     """
-    # Load image
-    image, error = load_image_from_path_or_base64(image_input)
+    # Load image from URL
+    image, error = load_image_from_url(image_url)
     if error:
         return error
 

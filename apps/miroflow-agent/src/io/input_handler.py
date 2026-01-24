@@ -468,6 +468,9 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
     file_content_section = ""  # Collect file content to append at the end
     initial_user_content = None  # Will be set for images to support multi-modal
 
+    # Get display filename (basename only) to hide full path
+    display_filename = os.path.basename(task_file_name) if task_file_name else ""
+
     if task_file_name:
         try:
             file_extension = task_file_name.rsplit(".", maxsplit=1)[-1].lower()
@@ -501,11 +504,13 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
 
                 # Create multi-modal content list
                 # This format is compatible with OpenAI API and similar interfaces
+                # Use only basename to hide full path
+                display_filename = os.path.basename(task_file_name)
                 initial_user_content = [
                     {
                         "type": "text",
                         "text": f"{task_description}\n\n"
-                        f"Note: An image file '{task_file_name}' is associated with this task. "
+                        f"Note: An image file '{display_filename}' is associated with this task. "
                         f"The image is included below for direct visual analysis. "
                         f"You may use available tools to process its content if necessary.\n\n"
                         f"{text_description}",
@@ -514,10 +519,10 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
                 ]
 
                 # Also update updated_task_description for backward compatibility
-                file_content_section += f"\n\nNote: An image file '{task_file_name}' is associated with this task. "
+                file_content_section += f"\n\nNote: An image file '{display_filename}' is associated with this task. "
                 file_content_section += f"The image has been included in the context for direct visual analysis.\n\n"
                 file_content_section += f"## Image Content\n"
-                file_content_section += f"File: {task_file_name}\n"
+                file_content_section += f"File: {display_filename}\n"
                 file_content_section += f"{text_description}\n\n"
 
             elif file_extension == "py":
@@ -526,8 +531,8 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
                     parsing_result = DocumentConverterResult(
                         title=None, text_content=f.read()
                     )
-                file_content_section += f"\n\nNote: A Python file '{task_file_name}' is associated with this task. The content has been extracted as text below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
-                file_content_section += f"## Python File\nFile: {task_file_name}\n\n"
+                file_content_section += f"\n\nNote: A Python file '{display_filename}' is associated with this task. The content has been extracted as text below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"## Python File\nFile: {display_filename}\n\n"
 
             elif file_extension in ["txt", "md", "sh", "yaml", "yml", "toml", "csv"]:
                 # Text-based files - read directly
@@ -544,9 +549,9 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
                     "toml": "TOML",
                     "csv": "CSV",
                 }.get(file_extension, "Text")
-                file_content_section += f"\n\nNote: A {file_type_name.lower()} file '{task_file_name}' is associated with this task. The content has been extracted as text below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"\n\nNote: A {file_type_name.lower()} file '{display_filename}' is associated with this task. The content has been extracted as text below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
                 file_content_section += (
-                    f"## {file_type_name} File\nFile: {task_file_name}\n\n"
+                    f"## {file_type_name} File\nFile: {display_filename}\n\n"
                 )
 
             elif file_extension in ["jsonld", "json"]:
@@ -557,37 +562,37 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
                             json.load(f), ensure_ascii=False, indent=2
                         ),
                     )
-                file_content_section += f"\n\nNote: A JSON file '{task_file_name}' is associated with this task. The content has been extracted as JSON format below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
-                file_content_section += f"## JSON File\nFile: {task_file_name}\n\n"
+                file_content_section += f"\n\nNote: A JSON file '{display_filename}' is associated with this task. The content has been extracted as JSON format below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"## JSON File\nFile: {display_filename}\n\n"
 
             elif file_extension in ["xlsx", "xls"]:
                 parsing_result = XlsxConverter(local_path=task_file_name)
-                file_content_section += f"\n\nNote: An Excel file '{task_file_name}' is associated with this task. The content has been extracted as a markdown table below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
-                file_content_section += f"## Excel File\nFile: {task_file_name}\n\n"
+                file_content_section += f"\n\nNote: An Excel file '{display_filename}' is associated with this task. The content has been extracted as a markdown table below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"## Excel File\nFile: {display_filename}\n\n"
 
             elif file_extension == "pdf":
                 parsing_result = DocumentConverterResult(
                     title=None,
                     text_content=pdfminer.high_level.extract_text(task_file_name),
                 )
-                file_content_section += f"\n\nNote: A PDF file '{task_file_name}' is associated with this task. The content has been extracted as text below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
-                file_content_section += f"## PDF File\nFile: {task_file_name}\n\n"
+                file_content_section += f"\n\nNote: A PDF file '{display_filename}' is associated with this task. The content has been extracted as text below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"## PDF File\nFile: {display_filename}\n\n"
 
             elif file_extension in ["docx", "doc"]:
                 parsing_result = DocxConverter(local_path=task_file_name)
-                file_content_section += f"\n\nNote: A Word document '{task_file_name}' is associated with this task. The content has been extracted as markdown below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
-                file_content_section += f"## Word Document\nFile: {task_file_name}\n\n"
+                file_content_section += f"\n\nNote: A Word document '{display_filename}' is associated with this task. The content has been extracted as markdown below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"## Word Document\nFile: {display_filename}\n\n"
 
             elif file_extension in ["html", "htm"]:
                 parsing_result = HtmlConverter(local_path=task_file_name)
-                file_content_section += f"\n\nNote: An HTML file '{task_file_name}' is associated with this task. The content has been extracted as markdown below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
-                file_content_section += f"## HTML File\nFile: {task_file_name}\n\n"
+                file_content_section += f"\n\nNote: An HTML file '{display_filename}' is associated with this task. The content has been extracted as markdown below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"## HTML File\nFile: {display_filename}\n\n"
 
             elif file_extension in ["pptx", "ppt"]:
                 parsing_result = PptxConverter(local_path=task_file_name)
-                file_content_section += f"\n\nNote: A PowerPoint presentation '{task_file_name}' is associated with this task. The content has been extracted as markdown below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"\n\nNote: A PowerPoint presentation '{display_filename}' is associated with this task. The content has been extracted as markdown below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
                 file_content_section += (
-                    f"## PowerPoint Presentation\nFile: {task_file_name}\n\n"
+                    f"## PowerPoint Presentation\nFile: {display_filename}\n\n"
                 )
 
             elif file_extension in AUDIO_EXTENSIONS:
@@ -600,8 +605,8 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
                 )
 
                 # Format as Markdown
-                file_content_section += f"\n\nNote: An audio file '{task_file_name}' is associated with this task. The content has been extracted as a transcription below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
-                file_content_section += f"## Audio Content\nFile: {task_file_name}\n\n"
+                file_content_section += f"\n\nNote: An audio file '{display_filename}' is associated with this task. The content has been extracted as a transcription below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"## Audio Content\nFile: {display_filename}\n\n"
                 file_content_section += f"> {caption}\n\n"
 
                 if relevant_info:
@@ -618,8 +623,8 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
                 )
 
                 # Format as Markdown
-                file_content_section += f"\n\nNote: A video file '{task_file_name}' is associated with this task. The content has been extracted as a detailed caption below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
-                file_content_section += f"## Video Content\nFile: {task_file_name}\n\n"
+                file_content_section += f"\n\nNote: A video file '{display_filename}' is associated with this task. The content has been extracted as a detailed caption below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"## Video Content\nFile: {display_filename}\n\n"
                 file_content_section += f"> {caption}\n\n"
 
                 if relevant_info:
@@ -628,12 +633,12 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
 
             elif file_extension in ["zip"]:
                 parsing_result = ZipConverter(local_path=task_file_name)
-                file_content_section += f"\n\nNote: A ZIP archive '{task_file_name}' is associated with this task. The content has been extracted as file list and contents below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
-                file_content_section += f"## ZIP Archive\nFile: {task_file_name}\n\n"
+                file_content_section += f"\n\nNote: A ZIP archive '{display_filename}' is associated with this task. The content has been extracted as file list and contents below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"## ZIP Archive\nFile: {display_filename}\n\n"
 
             elif file_extension == "pdb":
                 # PDB files (protein database) - only add note
-                file_content_section += f"\n\nNote: A PDB file '{task_file_name}' is associated with this task. You may use available tools to read its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                file_content_section += f"\n\nNote: A PDB file '{display_filename}' is associated with this task. You may use available tools to read its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
 
             else:
                 # For other file types, let MarkItDown try to handle it
@@ -649,9 +654,9 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
                             f"Info: Used MarkItDown as fallback to process file {task_file_name}"
                         )
                         # Add prompt for files processed by MarkItDown
-                        file_content_section += f"\n\nNote: A file '{task_file_name}' is associated with this task. The content has been extracted as markdown below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
+                        file_content_section += f"\n\nNote: A file '{display_filename}' is associated with this task. The content has been extracted as markdown below. You may use available tools to process its content if necessary. If you need to further process this file in the sandbox, please upload it to the sandbox first.\n\n"
                         file_content_section += (
-                            f"## File Content\nFile: {task_file_name}\n\n"
+                            f"## File Content\nFile: {display_filename}\n\n"
                         )
                 except Exception as e:
                     print(

@@ -12,6 +12,7 @@ main_agent:
     - tool-fetch-image
     - tool-google-search
     - jina_scrape_llm_summary
+    - tool-image-processing
   tool_blacklist:
     - [ "search_and_scrape_webpage", "sogou_search" ]
   max_turns: 10  # Maximum number of turns for main agent execution

@@ -21,6 +21,7 @@ from tenacity import (
 )
 
 from .utils import decode_http_urls_in_dict
+from .utils.search_cache import get_search_cache
 
 
 def download_and_encode_images(
@@ -157,6 +158,30 @@ def google_search(
             ensure_ascii=False,
         )
 
+    # Check cache first
+    cache = get_search_cache()
+    # Normalize parameters to match actual API request
+    normalized_num = num if num is not None else 10
+    normalized_page = page if page is not None else 1
+    
+    cache_params = {
+        "gl": gl,
+        "hl": hl,
+        "num": normalized_num,
+        "page": normalized_page,
+    }
+    # Only include autocorrect if it's explicitly set
+    if autocorrect is not None:
+        cache_params["autocorrect"] = autocorrect
+    if location:
+        cache_params["location"] = location
+    if tbs:
+        cache_params["tbs"] = tbs
+
+    cached_result = cache.get("google_search", q, **cache_params)
+    if cached_result is not None:
+        return cached_result
+
     try:
         # Build payload with all supported parameters
         payload: dict[str, Any] = {
@@ -203,7 +228,12 @@ def google_search(
         response_data["organic"] = organic_results
         response_data = decode_http_urls_in_dict(response_data)
 
-        return json.dumps(response_data, ensure_ascii=False)
+        result_json = json.dumps(response_data, ensure_ascii=False)
+
+        # Cache the result with the same normalized parameters
+        cache.set("google_search", q, result_json, **cache_params)
+
+        return result_json
 
     except Exception as e:
         return json.dumps(
@@ -346,6 +376,25 @@ def image_search(
             ensure_ascii=False,
         )
 
+    # Check cache first
+    cache = get_search_cache()
+    # Normalize parameters to match actual API request
+    normalized_num = num if num is not None else 5
+    normalized_page = page if page is not None else 1
+    
+    cache_params = {
+        "gl": gl,
+        "hl": hl,
+        "num": normalized_num,
+        "page": normalized_page,
+    }
+    if location:
+        cache_params["location"] = location
+
+    cached_result = cache.get("image_search", q, **cache_params)
+    if cached_result is not None:
+        return cached_result
+
     try:
         # Build payload with all supported parameters
         payload: dict[str, Any] = {
@@ -377,7 +426,12 @@ def image_search(
         if "images" in data and isinstance(data["images"], list):
             data["images"] = data["images"][:requested_num]
 
-        return json.dumps(data, ensure_ascii=False)
+        result_json = json.dumps(data, ensure_ascii=False)
+
+        # Cache the result with the same normalized parameters
+        cache.set("image_search", q, result_json, **cache_params)
+
+        return result_json
 
     except Exception as e:
         return json.dumps(
