@@ -11,6 +11,7 @@ def convert_to_json_chatml(messages: List[Dict[str, Any]]) -> List[Dict[str, str
     """
     Convert message list to OpenAI JSON format ChatML
     Filter out messages with role 'tool', convert content None to empty string
+    Preserves <image> markers for multi-modal content
     """
     chatml_list = []
     for message in messages:
@@ -26,8 +27,14 @@ def convert_to_json_chatml(messages: List[Dict[str, Any]]) -> List[Dict[str, str
         if isinstance(content, list):
             text_parts = []
             for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    text_parts.append(item.get("text", ""))
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+                    elif item.get("type") == "image_url":
+                        # Add <image> marker for images
+                        text_parts.append("<image>")
+                elif isinstance(item, str):
+                    text_parts.append(item)
             content = " ".join(text_parts)
         elif isinstance(content, str):
             pass
@@ -38,7 +45,7 @@ def convert_to_json_chatml(messages: List[Dict[str, Any]]) -> List[Dict[str, str
 
 
 def extract_and_save_chat_history(
-    log_data: Dict[str, Any], output_dir: Path, input_filename: str
+    log_data: Dict[str, Any], output_dir: Path, input_filename: str, original_log_path: str = None
 ):
     """
     Extract message history from log data and save as ChatML format
@@ -47,7 +54,10 @@ def extract_and_save_chat_history(
         log_data: Log data dictionary
         output_dir: Output directory
         input_filename: Input filename (without extension)
+        original_log_path: Path to original log file (for copying images data)
     """
+    import shutil
+
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -96,6 +106,14 @@ def extract_and_save_chat_history(
 
                     print(f"✓ Saved sub agent chat records: {sub_agent_output_file}")
 
+    # Copy images data file if it exists
+    if original_log_path:
+        images_file_path = Path(original_log_path).parent / f"{input_filename}_images.json"
+        if images_file_path.exists():
+            dest_images_path = output_dir / f"{input_filename}_images.json"
+            shutil.copy(images_file_path, dest_images_path)
+            print(f"✓ Copied images data: {dest_images_path}")
+
 
 def main():
     """Main function"""
@@ -128,7 +146,7 @@ def main():
 
         # Extract and save chat history
         print(f"Extracting chat history to: {output_dir}")
-        extract_and_save_chat_history(log_data, output_dir, input_filename)
+        extract_and_save_chat_history(log_data, output_dir, input_filename, str(log_file_path))
 
         print("\n✓ Chat history extraction completed!")
         print(f"Output directory: {output_dir.absolute()}")

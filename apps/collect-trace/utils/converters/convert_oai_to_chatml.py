@@ -43,14 +43,22 @@ def oai_tool_message_to_chat_message(oai_messages, agent_type, tool_definition):
         return "\n\n".join(mcp_tool_call_templates)
 
     def safe_get_text(content):
-        """Safely extract text content, handling different content formats"""
+        """Safely extract text content, handling different content formats including images"""
         if isinstance(content, list) and content:
-            if isinstance(content[0], dict) and "text" in content[0]:
-                return content[0]["text"]
-            elif isinstance(content[0], str):
-                return content[0]
-            else:
-                return str(content[0])
+            # Handle multi-modal content (text + images)
+            text_parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+                    elif item.get("type") == "image_url":
+                        # Add <image> marker for images
+                        text_parts.append("<image>")
+                elif isinstance(item, str):
+                    text_parts.append(item)
+                else:
+                    text_parts.append(str(item))
+            return " ".join(text_parts) if text_parts else ""
         elif isinstance(content, str):
             return content
         elif content is None:
@@ -231,6 +239,7 @@ def save_chatml_to_files(
     chatml_data: Dict[str, Any],
     output_dir: Path,
     input_filename: str,
+    original_log_path: str = None,
 ):
     """
     Save ChatML format messages to files
@@ -239,6 +248,7 @@ def save_chatml_to_files(
         chatml_data: Dictionary containing message history
         output_dir: Output directory
         input_filename: Input filename (without extension)
+        original_log_path: Path to original log file (for copying images data)
     """
     # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -261,6 +271,14 @@ def save_chatml_to_files(
         with open(sub_agent_output_file, "w", encoding="utf-8") as f:
             json.dump(messages, f, ensure_ascii=False, indent=2)
         print(f"✓ Saved sub agent {session_name} ChatML: {sub_agent_output_file}")
+
+    # Copy images data file if it exists
+    if original_log_path:
+        images_file_path = Path(original_log_path).parent / f"{input_filename}_images.json"
+        if images_file_path.exists():
+            dest_images_path = output_dir / f"{input_filename}_images.json"
+            shutil.copy(images_file_path, dest_images_path)
+            print(f"✓ Copied images data: {dest_images_path}")
 
 
 def extract_step_message(data, target_step_name):
@@ -325,7 +343,7 @@ def process_log_file(log_file_path: str, output_dir: str = "extracted_chatml"):
 
         # Save to files
         print(f"Saving ChatML files to: {output_path}")
-        save_chatml_to_files(chatml_data, output_path, input_filename)
+        save_chatml_to_files(chatml_data, output_path, input_filename, log_file_path)
 
         print("\n✓ Processing completed!")
         print(f"Output directory: {output_path.absolute()}")

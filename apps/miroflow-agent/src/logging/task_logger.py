@@ -185,6 +185,9 @@ class TaskLog:
     step_logs: List[StepLog] = field(default_factory=list)
     trace_data: Dict[str, Any] = field(default_factory=dict)
 
+    # Track images data for saving to separate file
+    _images_data: Dict[str, str] = field(default_factory=dict, init=False, repr=False, compare=False)
+
     def start_sub_agent_session(
         self, sub_agent_name: str, subtask_description: str
     ) -> str:
@@ -277,34 +280,36 @@ class TaskLog:
         else:  # info
             logger.info(log_message)
 
-    def serialize_for_json(self, obj):
+    def serialize_for_json(self, obj, image_key_prefix: str = ""):
         """Convert objects to JSON-serializable format"""
         if isinstance(obj, Path):
             return str(obj)
         elif isinstance(obj, dict):
             # Check if this is a message with content that might contain images
             if "role" in obj and "content" in obj:
-                return self._serialize_message(obj)
-            return {k: self.serialize_for_json(v) for k, v in obj.items()}
+                return self._serialize_message(obj, image_key_prefix)
+            return {k: self.serialize_for_json(v, image_key_prefix) for k, v in obj.items()}
         elif isinstance(obj, list):
-            return [self.serialize_for_json(item) for item in obj]
+            return [self.serialize_for_json(item, image_key_prefix) for item in obj]
         elif hasattr(obj, "__dict__"):
-            return self.serialize_for_json(obj.__dict__)
+            return self.serialize_for_json(obj.__dict__, image_key_prefix)
         else:
             return obj
 
-    def _serialize_message(self, message: dict) -> dict:
+    def _serialize_message(self, message: dict, image_key_prefix: str = "") -> dict:
         """
         Serialize a message, replacing base64 image data with placeholder.
 
         Args:
             message: A message dictionary with 'role' and 'content' fields
+            image_key_prefix: Prefix for image keys (e.g., "main_0", "sub_1")
 
         Returns:
             Serialized message with base64 data replaced by "<image>"
         """
         result = {"role": message["role"]}
         content = message["content"]
+        image_counter = 0
 
         # Handle different content formats
         if isinstance(content, list):
@@ -313,7 +318,16 @@ class TaskLog:
             for item in content:
                 if isinstance(item, dict):
                     if item.get("type") == "image_url":
-                        # Replace base64 image data with placeholder
+                        # Extract base64 data before replacing
+                        image_url = item.get("image_url", {}).get("url", "")
+                        if image_url and image_url != "<image>" and image_url.startswith("data:image"):
+                            # Generate unique key for this image
+                            image_key = f"{image_key_prefix}_{image_counter}" if image_key_prefix else f"image_{len(self._images_data)}"
+                            # Store the base64 data
+                            self._images_data[image_key] = image_url
+                            image_counter += 1
+
+                        # Replace with placeholder
                         serialized_content.append({
                             "type": "image_url",
                             "image_url": {"url": "<image>"}
@@ -330,6 +344,9 @@ class TaskLog:
         elif isinstance(content, str):
             # Text-only content - check if it contains base64 data
             if content.startswith("data:image") and ";base64," in content:
+                # Store the base64 data
+                image_key = f"{image_key_prefix}_0" if image_key_prefix else f"image_{len(self._images_data)}"
+                self._images_data[image_key] = content
                 result["content"] = "<image>"
             else:
                 result["content"] = content
@@ -357,10 +374,14 @@ class TaskLog:
         Note:
             Falls back to ASCII encoding if Unicode encoding fails.
         """
+        # Clear images data and start fresh
+        self._images_data.clear()
+
         # Convert to dict first
         data_dict = asdict(self)
         # Serialize any non-JSON-serializable objects
-        serialized_dict = self.serialize_for_json(data_dict)
+        # Use different prefixes for main and sub agents
+        serialized_dict = self.serialize_for_json(data_dict, image_key_prefix="main")
         try:
             return json.dumps(serialized_dict, ensure_ascii=False, indent=2)
         except UnicodeEncodeError as e:
@@ -376,14 +397,30 @@ class TaskLog:
         )
 
         filename = f"{self.log_dir}/task_{self.task_id}_{timestamp}.json"
+
+        # This will populate self._images_data during serialization
+        json_content = self.to_json()
+
+        # Save the main JSON log file
         try:
             with open(filename, "w", encoding="utf-8") as f:
-                f.write(self.to_json())
+                f.write(json_content)
         except UnicodeEncodeError as e:
             # Fallback: try with different encoding if UTF-8 fails
             print(f"Warning: UTF-8 encoding failed, trying with system default: {e}")
             with open(filename, "w") as f:
-                f.write(self.to_json())
+                f.write(json_content)
+
+        # Save images data to a separate file if any images were found
+        if self._images_data:
+            images_filename = f"{self.log_dir}/task_{self.task_id}_{timestamp}_images.json"
+            try:
+                with open(images_filename, "w", encoding="utf-8") as f:
+                    json.dump(self._images_data, f, ensure_ascii=False, indent=2)
+                print(f"Saved {len(self._images_data)} image(s) to: {images_filename}")
+            except Exception as e:
+                print(f"Warning: Failed to save images data: {e}")
+
         return filename
 
     @classmethod

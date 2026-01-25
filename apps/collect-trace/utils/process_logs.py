@@ -88,6 +88,13 @@ if __name__ == "__main__":
         print(f"Copying file: {path} to {success_log_dir}/{basename}")
         shutil.copy(path, f"{success_log_dir}/{basename}")
 
+        # Also copy the corresponding images file if it exists
+        images_file = path.replace(".json", "_images.json")
+        if os.path.exists(images_file):
+            images_basename = os.path.basename(images_file)
+            print(f"Copying images file: {images_file} to {success_log_dir}/{images_basename}")
+            shutil.copy(images_file, f"{success_log_dir}/{images_basename}")
+
     os.system(
         f"uv run utils/converters/convert_to_chatml_auto_batch.py {success_log_dir}/*.json -o {success_chatml_log_dir}"
     )
