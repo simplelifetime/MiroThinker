@@ -18,9 +18,17 @@ import asyncio
 import dataclasses
 import logging
 from typing import Any, Dict, List, Tuple, Union
+import os
 
 import tiktoken
-from openai import AsyncOpenAI, DefaultAsyncHttpxClient, DefaultHttpxClient, OpenAI
+from openai import (
+    AsyncAzureOpenAI,
+    AsyncOpenAI,
+    AzureOpenAI,
+    DefaultAsyncHttpxClient,
+    DefaultHttpxClient,
+    OpenAI,
+)
 
 from ...utils.prompt_utils import generate_mcp_system_prompt
 from ..base_client import BaseClient
@@ -30,21 +38,51 @@ logger = logging.getLogger("miroflow_agent")
 
 @dataclasses.dataclass
 class OpenAIClient(BaseClient):
-    def _create_client(self) -> Union[AsyncOpenAI, OpenAI]:
+    def _create_client(self) -> Union[AsyncOpenAI, OpenAI, AsyncAzureOpenAI, AzureOpenAI]:
         """Create LLM client"""
         http_client_args = {"headers": {"x-upstream-session-id": self.task_id}}
+
+        openai_backend = (os.environ.get("OPENAI_BACKEND") or "").strip().lower()
+        use_azure = openai_backend == "azure"
+
+        if use_azure:
+            azure_endpoint = self.cfg.llm.get("azure_endpoint") or self.base_url
+            api_version = self.cfg.llm.get("api_version") or os.environ.get("OPENAI_API_VERSION")
+
+            if not azure_endpoint:
+                raise ValueError(
+                    "OPENAI_BACKEND=azure requires `llm.azure_endpoint` (or `llm.base_url`)."
+                )
+            if not api_version:
+                raise ValueError(
+                    "OPENAI_BACKEND=azure requires `llm.api_version` (or env OPENAI_API_VERSION)."
+                )
+
+            if self.async_client:
+                return AsyncAzureOpenAI(
+                    api_key=self.api_key,
+                    api_version=api_version,
+                    azure_endpoint=azure_endpoint,
+                    http_client=DefaultAsyncHttpxClient(**http_client_args),
+                )
+            return AzureOpenAI(
+                api_key=self.api_key,
+                api_version=api_version,
+                azure_endpoint=azure_endpoint,
+                http_client=DefaultHttpxClient(**http_client_args),
+            )
+
         if self.async_client:
             return AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
                 http_client=DefaultAsyncHttpxClient(**http_client_args),
             )
-        else:
-            return OpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                http_client=DefaultHttpxClient(**http_client_args),
-            )
+        return OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            http_client=DefaultHttpxClient(**http_client_args),
+        )
 
     def _update_token_usage(self, usage_data: Any) -> None:
         """Update cumulative token usage"""
@@ -412,6 +450,51 @@ class OpenAIClient(BaseClient):
                 f"Error: {str(e)}",
             )
             return len(text) // 4
+    
+    def _estimate_image_tokens(self, image_url: str) -> int:
+        """
+        Args:
+            image_url: Image URL (can be data URI with base64 or regular URL)
+            
+        Returns:
+            Estimated token count for the image
+        """
+        try:
+            import base64
+            from PIL import Image
+            from io import BytesIO
+            
+            # Extract base64 data if it's a data URI
+            if image_url.startswith("data:image"):
+                # Format: data:image/jpeg;base64,<base64_data>
+                base64_data = image_url.split(",", 1)[1] if "," in image_url else ""
+            elif image_url.startswith("http://") or image_url.startswith("https://"):
+                print(f"URL image: {image_url}, use conservative estimate for URL images")
+                return 1024  # Conservative estimate for URL images
+            else:
+                # Assume it's already base64
+                base64_data = image_url
+            
+            # Decode base64 to get image
+            image_bytes = base64.b64decode(base64_data)
+            image = Image.open(BytesIO(image_bytes))
+            # Get original dimensions
+            width, height = image.size
+            
+            width_token = width // 28
+            height_token = height // 28
+            total_tokens = width_token * height_token
+            return total_tokens
+            
+        except Exception as e:
+            # If calculation fails, use conservative estimate
+            self.task_log.log_step(
+                "warning",
+                "LLM | Image Token Estimation",
+                f"Failed to calculate image tokens, using estimate: {str(e)}",
+            )
+            # Conservative estimate: assume medium-sized image
+            return 1024
 
     def ensure_summary_context(
         self, message_history: list, summary_prompt: str
@@ -433,7 +516,18 @@ class OpenAIClient(BaseClient):
         last_user_tokens = 0
         if message_history[-1]["role"] == "user":
             content = message_history[-1]["content"]
-            last_user_tokens = int(self._estimate_tokens(str(content)) * buffer_factor)
+            if isinstance(content, list):
+                for item in content:
+                    if item.get("type") == "image_url":
+                        last_user_tokens += self._estimate_image_tokens(item.get("image_url"))
+                        print(f"image estimated token: {last_user_tokens}")
+                    elif item.get("type") == "text":
+                        last_user_tokens += int(self._estimate_tokens(str(item.get("text"))) * buffer_factor)
+                        print(f"text estimated token: {last_user_tokens}")
+                    else:
+                        logger.error(f"Unknown content type: {item.get('type')}")
+            else:
+                last_user_tokens = int(self._estimate_tokens(str(content)) * buffer_factor)
 
         # Calculate total token count: last prompt + completion + last user message + summary + reserved response space
         estimated_total = (
@@ -444,6 +538,54 @@ class OpenAIClient(BaseClient):
             + self.max_tokens
             + 1000  # Add 1000 tokens as buffer
         )
+        print(f"{last_prompt_tokens=}")
+        print(f"{last_completion_tokens=}")
+        print(f"{last_user_tokens=}")
+        print(f"{summary_tokens=}")
+        print(f"{self.max_tokens=}")
+        print(f"{estimated_total=}")
+        print(f"{self.max_context_length=}")
+        
+        # Print last_user_tokens content
+        if message_history and message_history[-1]["role"] == "user":
+            last_user_content = message_history[-1]["content"]
+            print(f"\n=== last_user_tokens content (length: {len(str(last_user_content))} chars) ===")
+            print(f"{last_user_content}")
+            print("=" * 80)
+        
+        # Print last_prompt_tokens content (reconstruct the prompt from last call)
+        # Get system_prompt from task_log
+        if hasattr(self, 'task_log') and self.task_log:
+            main_agent_msg = getattr(self.task_log, 'main_agent_message_history', None)
+            system_prompt = ''
+            if isinstance(main_agent_msg, dict):
+                system_prompt = main_agent_msg.get('system_prompt', '')
+            
+            # Reconstruct the message history from last call (remove the last user message which is tool result)
+            last_call_message_history = message_history[:-1] if message_history and message_history[-1]["role"] == "user" else message_history
+            
+            # Build the full prompt that was sent in the last call
+            if system_prompt and last_call_message_history:
+                # Reconstruct messages as they were sent to LLM
+                full_prompt_parts = []
+                full_prompt_parts.append(f"System Prompt:\n{system_prompt}\n")
+                full_prompt_parts.append("\nMessage History:\n")
+                for msg in last_call_message_history:
+                    role = msg.get("role", "unknown")
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        # Handle multi-modal content
+                        content_str = "\n".join([str(item) for item in content])
+                    else:
+                        content_str = str(content)
+                    full_prompt_parts.append(f"[{role}]: {content_str}\n")
+                
+                full_prompt = "\n".join(full_prompt_parts)
+                print(f"\n=== last_prompt_tokens content (length: {len(full_prompt)} chars, estimated tokens: {last_prompt_tokens}) ===")
+                print(f"{full_prompt[-5000:]}")  # Print first 5000 chars to avoid too long output
+                if len(full_prompt) > 5000:
+                    print(f"\n... (truncated, total length: {len(full_prompt)} chars)")
+                print("=" * 80)
 
         if estimated_total >= self.max_context_length:
             self.task_log.log_step(

@@ -1121,6 +1121,14 @@ class Orchestrator:
                 message_history, temp_summary_prompt
             )
 
+            # Update task_log with the potentially modified message_history
+            # (messages may have been removed if context limit was reached)
+            self.task_log.main_agent_message_history = {
+                "system_prompt": system_prompt,
+                "message_history": message_history,
+            }
+            self.task_log.save()
+
             if not pass_length_check:
                 turn_count = max_turns
                 self.task_log.log_step(

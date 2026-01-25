@@ -40,7 +40,7 @@ import pptx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from markitdown import MarkItDown
-from openai import OpenAI
+from openai import AzureOpenAI, OpenAI
 from openpyxl.utils import get_column_letter
 
 # Ensure .env file is loaded
@@ -64,6 +64,32 @@ MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 SKIP_MARKITDOWN_EXTENSIONS = MEDIA_EXTENSIONS | {"pdb"}
 
 
+def _create_openai_compatible_client(api_key: str):
+    openai_backend = (os.environ.get("OPENAI_BACKEND") or "").strip().lower()
+    if openai_backend == "azure":
+        azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT") or os.environ.get(
+            "OPENAI_BASE_URL"
+        )
+        api_version = os.environ.get("AZURE_OPENAI_API_VERSION") or os.environ.get(
+            "OPENAI_API_VERSION"
+        )
+
+        if not azure_endpoint or not api_version:
+            raise ValueError(
+                "OPENAI_BACKEND=azure requires AZURE_OPENAI_ENDPOINT (or OPENAI_BASE_URL) "
+                "and AZURE_OPENAI_API_VERSION (or OPENAI_API_VERSION)."
+            )
+
+        return AzureOpenAI(
+            api_key=api_key,
+            api_version=api_version,
+            azure_endpoint=azure_endpoint,
+        )
+
+    openai_base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    return OpenAI(api_key=api_key, base_url=openai_base_url)
+
+
 def _generate_image_caption(image_path: str) -> str:
     """
     Generate a caption for an image using OpenAI's GPT-4o vision model.
@@ -76,12 +102,11 @@ def _generate_image_caption(image_path: str) -> str:
     """
     try:
         OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-        OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
         if not OPENAI_API_KEY:
             return "[Caption unavailable: OPENAI_API_KEY not set]"
 
-        client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+        client = _create_openai_compatible_client(api_key=OPENAI_API_KEY)
 
         # Read and encode image
         with open(image_path, "rb") as image_file:
@@ -141,12 +166,11 @@ def _generate_audio_caption(audio_path: str) -> str:
     """
     try:
         OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-        OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
         if not OPENAI_API_KEY:
             return "[Caption unavailable: OPENAI_API_KEY not set]"
 
-        client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+        client = _create_openai_compatible_client(api_key=OPENAI_API_KEY)
 
         # Transcribe audio
         with open(audio_path, "rb") as audio_file:
@@ -173,12 +197,11 @@ def _generate_video_caption(video_path: str) -> str:
     """
     try:
         OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-        OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
         if not OPENAI_API_KEY:
             return "[Caption unavailable: OPENAI_API_KEY not set]"
 
-        client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+        client = _create_openai_compatible_client(api_key=OPENAI_API_KEY)
 
         # Read and encode video
         with open(video_path, "rb") as video_file:
@@ -241,12 +264,11 @@ def _extract_task_relevant_info_from_image(
     """
     try:
         OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-        OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
         if not OPENAI_API_KEY:
             return ""
 
-        client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+        client = _create_openai_compatible_client(api_key=OPENAI_API_KEY)
 
         # Read and encode image
         with open(image_path, "rb") as image_file:
@@ -313,12 +335,11 @@ def _extract_task_relevant_info_from_audio(
     """
     try:
         OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-        OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
         if not OPENAI_API_KEY:
             return ""
 
-        client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+        client = _create_openai_compatible_client(api_key=OPENAI_API_KEY)
 
         # Read and encode audio file
         with open(audio_path, "rb") as audio_file:
@@ -387,12 +408,11 @@ def _extract_task_relevant_info_from_video(
     """
     try:
         OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-        OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
         if not OPENAI_API_KEY:
             return ""
 
-        client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+        client = _create_openai_compatible_client(api_key=OPENAI_API_KEY)
 
         # Read and encode video
         with open(video_path, "rb") as video_file:
@@ -467,7 +487,6 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
     updated_task_description = task_description
     file_content_section = ""  # Collect file content to append at the end
     initial_user_content = None  # Will be set for images to support multi-modal
-
     # Get display filename (basename only) to hide full path
     display_filename = os.path.basename(task_file_name) if task_file_name else ""
 

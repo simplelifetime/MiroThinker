@@ -61,8 +61,11 @@ def download_image_from_url(image_url: str, timeout: int = 30) -> tuple[bytes, s
         if parsed_url.scheme not in ['http', 'https']:
             return None, None, f"Unsupported URL scheme: {parsed_url.scheme}. Only http and https are supported."
 
-        # Download image
-        response = requests.get(image_url, timeout=timeout, stream=True)
+        # Download image with User-Agent header to avoid 403 errors
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        response = requests.get(image_url, timeout=timeout, stream=True, headers=headers)
         response.raise_for_status()
 
         # Get MIME type
