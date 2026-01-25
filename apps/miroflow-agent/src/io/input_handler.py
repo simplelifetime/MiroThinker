@@ -489,7 +489,6 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
     initial_user_content = None  # Will be set for images to support multi-modal
     # Get display filename (basename only) to hide full path
     display_filename = os.path.basename(task_file_name) if task_file_name else ""
-
     if task_file_name:
         try:
             file_extension = task_file_name.rsplit(".", maxsplit=1)[-1].lower()
