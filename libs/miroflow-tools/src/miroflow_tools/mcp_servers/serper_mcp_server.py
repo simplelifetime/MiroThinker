@@ -180,6 +180,7 @@ def google_search(
 
     cached_result = cache.get("google_search", q, **cache_params)
     if cached_result is not None:
+        print(f"[SEARCH_CACHE] Cache HIT for google_search: '{q}'")
         return cached_result
 
     try:
@@ -393,6 +394,7 @@ def image_search(
 
     cached_result = cache.get("image_search", q, **cache_params)
     if cached_result is not None:
+        print(f"[SEARCH_CACHE] Cache HIT for image_search: '{q}'")
         return cached_result
 
     try:

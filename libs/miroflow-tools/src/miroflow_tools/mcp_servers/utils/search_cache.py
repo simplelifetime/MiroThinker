@@ -19,13 +19,26 @@ class SearchCache:
     Stores search results in a JSON file with keys based on tool name and parameters.
     """
 
-    def __init__(self, cache_path: Optional[str] = None):
+    def __init__(self, cache_path: Optional[str] = None, enabled: Optional[bool] = None):
         """
         Initialize the search cache.
 
         Args:
             cache_path: Path to the cache file. If None, uses default path.
+            enabled: Whether caching is enabled. If None, checks MIROFLOW_SEARCH_CACHE_ENABLED env var.
         """
+        # Check if caching is disabled via environment variable
+        if enabled is None:
+            env_enabled = os.getenv("MIROFLOW_SEARCH_CACHE_ENABLED", "true").lower()
+            self.enabled = env_enabled not in ("false", "0", "no", "off")
+        else:
+            self.enabled = enabled
+
+        if not self.enabled:
+            self._cache: Dict[str, Any] = {}
+            self.cache_path = None
+            return
+
         if cache_path is None:
             # Default cache path in user's home directory
             cache_dir = Path.home() / "MiroThinker" / ".miroflow_tools" / "cache"
@@ -50,6 +63,8 @@ class SearchCache:
 
     def _save_cache(self):
         """Save cache to file."""
+        if not self.enabled:
+            return
         try:
             with open(self.cache_path, "w", encoding="utf-8") as f:
                 json.dump(self._cache, f, ensure_ascii=False, indent=2)
@@ -94,8 +109,11 @@ class SearchCache:
             **kwargs: Additional search parameters
 
         Returns:
-            Cached JSON string result, or None if not found
+            Cached JSON string result, or None if not found or cache is disabled
         """
+        if not self.enabled:
+            return None
+
         cache_key = self._generate_cache_key(tool_name, query, **kwargs)
 
         if cache_key in self._cache:
@@ -113,12 +131,17 @@ class SearchCache:
             result: JSON string result to cache
             **kwargs: Additional search parameters
         """
+        if not self.enabled:
+            return
+
         cache_key = self._generate_cache_key(tool_name, query, **kwargs)
         self._cache[cache_key] = result
         self._save_cache()
 
     def clear(self):
         """Clear all cached results."""
+        if not self.enabled:
+            return
         self._cache = {}
         self._save_cache()
 
@@ -131,6 +154,8 @@ class SearchCache:
             query: Search query string
             **kwargs: Additional search parameters
         """
+        if not self.enabled:
+            return
         cache_key = self._generate_cache_key(tool_name, query, **kwargs)
         if cache_key in self._cache:
             del self._cache[cache_key]
