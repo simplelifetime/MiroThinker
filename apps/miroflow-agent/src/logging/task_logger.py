@@ -389,6 +389,76 @@ class TaskLog:
             print(f"Warning: Unicode encoding failed, falling back to ASCII: {e}")
             return json.dumps(serialized_dict, ensure_ascii=True, indent=2)
 
+    def _save_images_as_files(self, timestamp: str) -> List[str]:
+        """
+        Save images as individual files in a dedicated directory.
+
+        Args:
+            timestamp: Timestamp string for naming
+
+        Returns:
+            List of saved image file paths
+        """
+        if not self._images_data:
+            return []
+
+        import base64
+
+        # Create images directory under save_images subdirectory
+        images_dir = f"{self.log_dir}/save_images/task_{self.task_id}_{timestamp}_images"
+        os.makedirs(images_dir, exist_ok=True)
+
+        saved_paths = []
+
+        for image_key, base64_data in self._images_data.items():
+            try:
+                # Extract MIME type and file extension
+                if base64_data.startswith("data:image/"):
+                    # Parse data URL (e.g., "data:image/jpeg;base64,...")
+                    mime_part = base64_data.split(";")[0]
+                    mime_type = mime_part.replace("data:", "")
+
+                    # Map MIME type to extension
+                    mime_to_ext = {
+                        "image/jpeg": ".jpg",
+                        "image/jpg": ".jpg",
+                        "image/png": ".png",
+                        "image/gif": ".gif",
+                        "image/webp": ".webp",
+                        "image/bmp": ".bmp",
+                    }
+                    ext = mime_to_ext.get(mime_type, ".jpg")
+
+                    # Remove data URL prefix
+                    if "," in base64_data:
+                        base64_data = base64_data.split(",", 1)[1]
+                else:
+                    # Default to JPEG if no data URL prefix
+                    ext = ".jpg"
+
+                # Decode base64
+                image_bytes = base64.b64decode(base64_data)
+
+                # Generate filename based on image key
+                # image_key format: "main_0", "main_1", etc. or "image_0", "image_1"
+                safe_image_key = image_key.replace("/", "_").replace("\\", "_")
+                image_filename = f"{self.task_id}_{safe_image_key}{ext}"
+                image_path = os.path.join(images_dir, image_filename)
+
+                # Save image file
+                with open(image_path, "wb") as f:
+                    f.write(image_bytes)
+
+                saved_paths.append(image_path)
+
+            except Exception as e:
+                print(f"Warning: Failed to save image {image_key}: {e}")
+
+        if saved_paths:
+            print(f"Saved {len(saved_paths)} image(s) to directory: {images_dir}")
+
+        return saved_paths
+
     def save(self):
         """Save as a single JSON file"""
         os.makedirs(self.log_dir, exist_ok=True)
@@ -411,15 +481,8 @@ class TaskLog:
             with open(filename, "w") as f:
                 f.write(json_content)
 
-        # Save images data to a separate file if any images were found
-        if self._images_data:
-            images_filename = f"{self.log_dir}/task_{self.task_id}_{timestamp}_images.json"
-            try:
-                with open(images_filename, "w", encoding="utf-8") as f:
-                    json.dump(self._images_data, f, ensure_ascii=False, indent=2)
-                print(f"Saved {len(self._images_data)} image(s) to: {images_filename}")
-            except Exception as e:
-                print(f"Warning: Failed to save images data: {e}")
+        # Save images as files if any images were found
+        saved_image_paths = self._save_images_as_files(timestamp)
 
         return filename
 

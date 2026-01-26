@@ -80,24 +80,74 @@ if __name__ == "__main__":
     # Create successful logs directory
     success_log_dir = parent_dir + "/successful_logs"
     success_chatml_log_dir = parent_dir + "/successful_chatml_logs"
+    success_sharegpt_log_dir = parent_dir + "/successful_sharegpt_logs"
     os.makedirs(success_log_dir, exist_ok=True)
+    os.makedirs(success_sharegpt_log_dir, exist_ok=True)
     print(f"Successful logs directory: {success_log_dir}")
+    print(f"Successful ShareGPT logs directory: {success_sharegpt_log_dir}")
 
     for i, path in enumerate(result, 1):
         basename = os.path.basename(path)
         print(f"Copying file: {path} to {success_log_dir}/{basename}")
         shutil.copy(path, f"{success_log_dir}/{basename}")
 
-        # Also copy the corresponding images file if it exists
+        # Get the base filename without extension
+        file_basename = os.path.splitext(basename)[0]
+
+        # Try to copy the corresponding images directory
+        # First try new format: save_images/task_xxx_images
+        path_dir = os.path.dirname(path)
+        new_format_images_dir = os.path.join(path_dir, "save_images", f"{file_basename}_images")
+
+        # Then try old format: task_xxx_images (in parent dir)
+        old_format_images_dir = path.replace(".json", "_images")
+
+        # Determine which format exists and copy it
+        if os.path.exists(new_format_images_dir) and os.path.isdir(new_format_images_dir):
+            images_basename = os.path.basename(new_format_images_dir)
+            dest_images_dir = os.path.join(success_log_dir, images_basename)
+            print(f"Copying images directory (new format): {new_format_images_dir} to {dest_images_dir}")
+            if os.path.exists(dest_images_dir):
+                shutil.rmtree(dest_images_dir)
+            shutil.copytree(new_format_images_dir, dest_images_dir)
+        elif os.path.exists(old_format_images_dir) and os.path.isdir(old_format_images_dir):
+            images_basename = os.path.basename(old_format_images_dir)
+            dest_images_dir = f"{success_log_dir}/{images_basename}"
+            print(f"Copying images directory (old format): {old_format_images_dir} to {dest_images_dir}")
+            if os.path.exists(dest_images_dir):
+                shutil.rmtree(dest_images_dir)
+            shutil.copytree(old_format_images_dir, dest_images_dir)
+
+        # Also copy the old-style images JSON file if it exists (for backward compatibility)
         images_file = path.replace(".json", "_images.json")
         if os.path.exists(images_file):
             images_basename = os.path.basename(images_file)
             print(f"Copying images file: {images_file} to {success_log_dir}/{images_basename}")
             shutil.copy(images_file, f"{success_log_dir}/{images_basename}")
 
+    # Convert to ChatML format
+    print("\n=== Converting to ChatML format ===")
     os.system(
         f"uv run utils/converters/convert_to_chatml_auto_batch.py {success_log_dir}/*.json -o {success_chatml_log_dir}"
     )
     os.system(
         f"uv run utils/merge_chatml_msgs_to_one_json.py --input_dir {success_chatml_log_dir}"
     )
+
+    # Convert to ShareGPT format
+    print("\n=== Converting to ShareGPT format ===")
+    import subprocess
+    for json_file in os.listdir(success_log_dir):
+        if json_file.endswith(".json") and not json_file.endswith("_images.json"):
+            json_path = os.path.join(success_log_dir, json_file)
+            print(f"Converting {json_file} to ShareGPT format...")
+            try:
+                result = subprocess.run(
+                    ["uv", "run", "utils/converters/convert_to_sharegpt.py", json_path, success_sharegpt_log_dir],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    print(f"Warning: Failed to convert {json_file}: {result.stderr}")
+            except Exception as e:
+                print(f"Warning: Error converting {json_file}: {e}")
