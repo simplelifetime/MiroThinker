@@ -17,12 +17,18 @@ Tools provided:
 import base64
 import io
 import os
+import random
+import string
 from typing import Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import requests
+from dotenv import load_dotenv
 from fastmcp import FastMCP
 from PIL import Image, ImageDraw
+
+# Ensure .env file is loaded
+load_dotenv()
 
 # Initialize FastMCP server
 mcp = FastMCP("image-processing-server")
@@ -30,6 +36,114 @@ mcp = FastMCP("image-processing-server")
 # Constants
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
 SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+
+
+class OSSUploader:
+    """Handler for uploading images to Aliyun OSS."""
+
+    def __init__(self):
+        """Initialize OSS uploader with credentials from environment variables."""
+        self.access_key_id = os.getenv("OSS_ACCESS_KEY_ID")
+        self.access_key_secret = os.getenv("OSS_ACCESS_KEY_SECRET")
+        self.bucket_name = os.getenv("OSS_BUCKET_NAME", "mitalinlp")
+        self.endpoint = os.getenv("OSS_ENDPOINT", "http://oss-cn-hangzhou.aliyuncs.com")
+
+        # Import oss2 only when needed to avoid dependency issues
+        try:
+            import oss2
+
+            self.oss2 = oss2
+        except ImportError:
+            print("Warning: oss2 not installed. OSS upload will be disabled.")
+            self.oss2 = None
+
+    def generate_random_string(self, length=32):
+        """
+        Generate a random string for file naming.
+
+        Args:
+            length: Length of the random string
+
+        Returns:
+            Random alphanumeric string
+        """
+        letters = string.ascii_letters + string.digits
+        return "".join(random.choice(letters) for _ in range(length))
+
+    def upload_bytes(self, image_bytes: bytes) -> Optional[str]:
+        """
+        Upload image bytes to Aliyun OSS.
+
+        Args:
+            image_bytes: Image data in bytes format
+
+        Returns:
+            Signed OSS URL (valid for 100 hours), or None if upload fails
+        """
+        if not self.oss2:
+            print("Error: oss2 not available. Cannot upload to OSS.")
+            return None
+
+        if not self.access_key_id or not self.access_key_secret:
+            print("Error: OSS credentials not configured.")
+            return None
+
+        try:
+            image_name = f"{self.generate_random_string()}.jpeg"
+            target_path = f"zhili.zl/qwenvl_rft/image/{image_name}"
+
+            # Check file size
+            image_size = len(image_bytes)
+
+            # Skip small files (< 1KB)
+            if image_size <= 1024:
+                print("Info: Image size too small (< 1KB), skipping upload.")
+                return None
+
+            # Authenticate and create bucket
+            auth = self.oss2.Auth(self.access_key_id, self.access_key_secret)
+            bucket = self.oss2.Bucket(auth, self.endpoint, self.bucket_name)
+
+            # Upload
+            bucket.put_object(target_path, image_bytes)
+
+            # Generate signed URL (valid for 100 hours)
+            file_url = bucket.sign_url("GET", target_path, 360000)
+            return file_url
+
+        except Exception as e:
+            print(f"Error: Failed to upload image to OSS: {str(e)}")
+            return None
+
+
+def format_image_for_context(
+    image_base64: str,
+    image_url: Optional[str],
+    description: str,
+) -> Tuple[dict, str]:
+    """
+    Format image data for inclusion in LLM context.
+
+    Args:
+        image_base64: Base64-encoded image data
+        image_url: URL of the image (can be None)
+        description: Text description of the image
+
+    Returns:
+        Tuple of (image_content_dict, text_description)
+    """
+    # Create image content dict for OpenAI API format
+    image_content = {
+        "type": "image_url",
+        "image_url": {"url": image_base64},
+    }
+
+    # Create text description with metadata
+    text_parts = [f"Image URL: {image_url or 'N/A'}", f"Description: {description}"]
+
+    text_description = ", ".join(text_parts)
+
+    return image_content, text_description
 
 
 def download_image_from_url(image_url: str, timeout: int = 30) -> Tuple[Optional[bytes], Optional[str]]:
@@ -146,7 +260,7 @@ async def zoom_in(
         output_format: Output image format ('PNG', 'JPEG', etc.). Default is 'PNG'
 
     Returns:
-        Base64-encoded zoomed image with data URI prefix, or error message if failed
+        JSON-formatted multi-modal content with text description and base64-encoded image
 
     Example:
         zoom_in(image_url="https://example.com/image.jpg", x=100, y=100, width=200, height=200)
@@ -160,23 +274,52 @@ async def zoom_in(
         # Validate coordinates
         img_width, img_height = image.size
         if x < 0 or y < 0:
-            return f"[ERROR]: Coordinates cannot be negative (x={x}, y={y})"
+            return f'[{{"error": "Coordinates cannot be negative (x={x}, y={y})"}}]'
         if width <= 0 or height <= 0:
-            return f"[ERROR]: Width and height must be positive (width={width}, height={height})"
+            return f'[{{"error": "Width and height must be positive (width={width}, height={height})"}}]'
         if x + width > img_width or y + height > img_height:
-            return f"[ERROR]: Region extends beyond image bounds (image size: {img_width}x{img_height}, region: {x}+{width}x{y}+{height})"
+            return f'[{{"error": "Region extends beyond image bounds (image size: {img_width}x{img_height}, region: {x}+{width}x{y}+{height})"}}]'
 
         # Crop the region
         box = (x, y, x + width, y + height)
         cropped = image.crop(box)
 
-        # Encode to base64
-        result = encode_image_to_base64(cropped, format=output_format)
+        # Convert to bytes for OSS upload
+        buffer = io.BytesIO()
+        cropped.save(buffer, format=output_format)
+        image_bytes = buffer.getvalue()
 
-        return f"[SUCCESS]: Zoomed in on region ({x}, {y}, {width}, {height}). Image dimensions: {width}x{height}. Base64 encoded image:\n{result}"
+        # Upload to OSS
+        oss_uploader = OSSUploader()
+        oss_url = oss_uploader.upload_bytes(image_bytes)
+
+        # Encode to base64 for return
+        base64_str = base64.b64encode(image_bytes).decode("utf-8")
+        mime_type = f"image/{output_format.lower()}"
+        base64_with_mime = f"data:{mime_type};base64,{base64_str}"
+
+        # Generate description
+        description = f"[Zoomed region: ({x}, {y}, {width}, {height}) from original image]"
+
+        # Format for multi-modal context
+        image_content, text_description = format_image_for_context(
+            base64_with_mime, oss_url, description
+        )
+
+        # Return multi-modal format as JSON string (similar to fetch_image)
+        import json
+        result = [
+            {
+                "type": "text",
+                "text": f"[SUCCESS]: Zoomed in on region ({x}, {y}, {width}, {height}). Image dimensions: {width}x{height}.\n{text_description}"
+            },
+            image_content
+        ]
+
+        return json.dumps(result)
 
     except Exception as e:
-        return f"[ERROR]: Failed to zoom in: {str(e)}"
+        return f'[{{"error": "Failed to zoom in: {str(e)}"}}]'
 
 
 @mcp.tool()
@@ -199,7 +342,7 @@ async def rotate(
         output_format: Output image format ('PNG', 'JPEG', etc.). Default is 'PNG'
 
     Returns:
-        Base64-encoded rotated image with data URI prefix, or error message if failed
+        JSON-formatted multi-modal content with text description and base64-encoded image
 
     Example:
         rotate(image_url="https://example.com/image.jpg", angle=45, expand=True)
@@ -213,17 +356,46 @@ async def rotate(
         # Rotate image
         rotated = image.rotate(angle, expand=expand, resample=Image.BICUBIC)
 
-        # Encode to base64
-        result = encode_image_to_base64(rotated, format=output_format)
+        # Convert to bytes for OSS upload
+        buffer = io.BytesIO()
+        rotated.save(buffer, format=output_format)
+        image_bytes = buffer.getvalue()
+
+        # Upload to OSS
+        oss_uploader = OSSUploader()
+        oss_url = oss_uploader.upload_bytes(image_bytes)
+
+        # Encode to base64 for return
+        base64_str = base64.b64encode(image_bytes).decode("utf-8")
+        mime_type = f"image/{output_format.lower()}"
+        base64_with_mime = f"data:{mime_type};base64,{base64_str}"
+
+        # Generate description
+        expand_info = "expanded" if expand else "original size"
+        description = f"[Rotated image: {angle} degrees, {expand_info}]"
+
+        # Format for multi-modal context
+        image_content, text_description = format_image_for_context(
+            base64_with_mime, oss_url, description
+        )
 
         original_size = image.size
         rotated_size = rotated.size
-        expand_info = " (expanded)" if expand else " (original size)"
 
-        return f"[SUCCESS]: Rotated image by {angle} degrees{expand_info}. Original size: {original_size[0]}x{original_size[1]}, Rotated size: {rotated_size[0]}x{rotated_size[1]}. Base64 encoded image:\n{result}"
+        # Return multi-modal format as JSON string (similar to fetch_image)
+        import json
+        result = [
+            {
+                "type": "text",
+                "text": f"[SUCCESS]: Rotated image by {angle} degrees ({'expanded' if expand else 'original size'}). Original size: {original_size[0]}x{original_size[1]}, Rotated size: {rotated_size[0]}x{rotated_size[1]}.\n{text_description}"
+            },
+            image_content
+        ]
+
+        return json.dumps(result)
 
     except Exception as e:
-        return f"[ERROR]: Failed to rotate: {str(e)}"
+        return f'[{{"error": "Failed to rotate: {str(e)}"}}]'
 
 
 @mcp.tool()
@@ -244,7 +416,7 @@ async def flip(
         output_format: Output image format ('PNG', 'JPEG', etc.). Default is 'PNG'
 
     Returns:
-        Base64-encoded flipped image with data URI prefix, or error message if failed
+        JSON-formatted multi-modal content with text description and base64-encoded image
 
     Example:
         flip(image_url="https://example.com/image.jpg", direction="horizontal")
@@ -258,7 +430,7 @@ async def flip(
         # Validate direction
         direction = direction.lower()
         if direction not in ["horizontal", "vertical"]:
-            return f"[ERROR]: Invalid direction '{direction}'. Must be 'horizontal' or 'vertical'"
+            return f'[{{"error": "Invalid direction \'{direction}\'. Must be \'horizontal\' or \'vertical\'"}}]'
 
         # Flip image
         if direction == "horizontal":
@@ -268,13 +440,42 @@ async def flip(
             flipped = image.transpose(Image.FLIP_TOP_BOTTOM)
             direction_str = "vertically (top-bottom)"
 
-        # Encode to base64
-        result = encode_image_to_base64(flipped, format=output_format)
+        # Convert to bytes for OSS upload
+        buffer = io.BytesIO()
+        flipped.save(buffer, format=output_format)
+        image_bytes = buffer.getvalue()
 
-        return f"[SUCCESS]: Flipped image {direction_str}. Image dimensions: {flipped.size[0]}x{flipped.size[1]}. Base64 encoded image:\n{result}"
+        # Upload to OSS
+        oss_uploader = OSSUploader()
+        oss_url = oss_uploader.upload_bytes(image_bytes)
+
+        # Encode to base64 for return
+        base64_str = base64.b64encode(image_bytes).decode("utf-8")
+        mime_type = f"image/{output_format.lower()}"
+        base64_with_mime = f"data:{mime_type};base64,{base64_str}"
+
+        # Generate description
+        description = f"[Flipped image: {direction_str}]"
+
+        # Format for multi-modal context
+        image_content, text_description = format_image_for_context(
+            base64_with_mime, oss_url, description
+        )
+
+        # Return multi-modal format as JSON string (similar to fetch_image)
+        import json
+        result = [
+            {
+                "type": "text",
+                "text": f"[SUCCESS]: Flipped image {direction_str}. Image dimensions: {flipped.size[0]}x{flipped.size[1]}.\n{text_description}"
+            },
+            image_content
+        ]
+
+        return json.dumps(result)
 
     except Exception as e:
-        return f"[ERROR]: Failed to flip: {str(e)}"
+        return f'[{{"error": "Failed to flip: {str(e)}"}}]'
 
 
 @mcp.tool()
@@ -310,7 +511,7 @@ async def put_box(
         output_format: Output image format ('PNG', 'JPEG', etc.). Default is 'PNG'
 
     Returns:
-        Base64-encoded annotated image with data URI prefix, or error message if failed
+        JSON-formatted multi-modal content with text description and base64-encoded image
 
     Example:
         put_box(image_url="https://example.com/image.jpg", x1=50, y1=50, x2=150, y2=150, color="red", label="object 1")
@@ -324,13 +525,13 @@ async def put_box(
         # Validate coordinates
         img_width, img_height = image.size
         if x1 < 0 or y1 < 0 or x2 < 0 or y2 < 0:
-            return f"[ERROR]: Coordinates cannot be negative (x1={x1}, y1={y1}, x2={x2}, y2={y2})"
+            return f'[{{"error": "Coordinates cannot be negative (x1={x1}, y1={y1}, x2={x2}, y2={y2})"}}]'
 
         if x1 >= x2 or y1 >= y2:
-            return f"[ERROR]: Invalid box dimensions: x1 must be less than x2, y1 must be less than y2 (got: x1={x1}, y1={y1}, x2={x2}, y2={y2})"
+            return f'[{{"error": "Invalid box dimensions: x1 must be less than x2, y1 must be less than y2 (got: x1={x1}, y1={y1}, x2={x2}, y2={y2})"}}]'
 
         if x2 > img_width or y2 > img_height:
-            return f"[ERROR]: Box extends beyond image bounds (image size: {img_width}x{img_height}, box: ({x1},{y1}) to ({x2},{y2}))"
+            return f'[{{"error": "Box extends beyond image bounds (image size: {img_width}x{img_height}, box: ({x1},{y1}) to ({x2},{y2}))"}}]'
 
         # Create a copy to avoid modifying the original
         annotated = image.copy()
@@ -358,14 +559,43 @@ async def put_box(
                 # If font loading fails, just draw the text without font
                 draw.text((x1, max(0, y1 - 20)), label, fill=color)
 
-        # Encode to base64
-        result = encode_image_to_base64(annotated, format=output_format)
+        # Convert to bytes for OSS upload
+        buffer = io.BytesIO()
+        annotated.save(buffer, format=output_format)
+        image_bytes = buffer.getvalue()
 
+        # Upload to OSS
+        oss_uploader = OSSUploader()
+        oss_url = oss_uploader.upload_bytes(image_bytes)
+
+        # Encode to base64 for return
+        base64_str = base64.b64encode(image_bytes).decode("utf-8")
+        mime_type = f"image/{output_format.lower()}"
+        base64_with_mime = f"data:{mime_type};base64,{base64_str}"
+
+        # Generate description
         label_info = f" with label '{label}'" if label else ""
-        return f"[SUCCESS]: Added bounding box from ({x1},{y1}) to ({x2},{y2}){label_info}. Box color: {color}, Line width: {line_width}. Base64 encoded image:\n{result}"
+        description = f"[Annotated image: bounding box ({x1},{y1}) to ({x2},{y2}){label_info}, color: {color}]"
+
+        # Format for multi-modal context
+        image_content, text_description = format_image_for_context(
+            base64_with_mime, oss_url, description
+        )
+
+        # Return multi-modal format as JSON string (similar to fetch_image)
+        import json
+        result = [
+            {
+                "type": "text",
+                "text": f"[SUCCESS]: Added bounding box from ({x1},{y1}) to ({x2},{y2}){label_info}. Box color: {color}, Line width: {line_width}.\n{text_description}"
+            },
+            image_content
+        ]
+
+        return json.dumps(result)
 
     except Exception as e:
-        return f"[ERROR]: Failed to put box: {str(e)}"
+        return f'[{{"error": "Failed to put box: {str(e)}"}}]'
 
 
 @mcp.tool()

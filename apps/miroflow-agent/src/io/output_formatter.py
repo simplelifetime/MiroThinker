@@ -168,6 +168,31 @@ class OutputFormatter:
                 except (json.JSONDecodeError, KeyError):
                     pass  # Fall through to regular text formatting
 
+            # Check if this is an image processing tool result (multi-modal format)
+            if tool_name in ["zoom_in", "rotate", "flip", "put_box"]:
+                try:
+                    # Parse JSON result
+                    if isinstance(result, str):
+                        data = json.loads(result)
+                    else:
+                        data = result
+
+                    # Check if this contains an error
+                    if isinstance(data, list) and len(data) > 0:
+                        # Validate the structure as multi-modal content
+                        valid_content = True
+                        for item in data:
+                            if not isinstance(item, dict) or "type" not in item:
+                                valid_content = False
+                                break
+
+                        if valid_content:
+                            # Return the multi-modal content list directly
+                            return data
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    # If parsing fails, treat as regular text
+                    pass
+
             # Provide the original output result of the tool
             content = result
             # Truncate overly long results to prevent context overflow
