@@ -15,6 +15,35 @@ from urllib.parse import urlparse
 from fastmcp import FastMCP
 import requests
 
+
+def is_valid_image(content: bytes) -> bool:
+    """
+    Check if the content is a valid image by checking magic bytes.
+
+    Args:
+        content: The downloaded content bytes
+
+    Returns:
+        True if content starts with valid image magic bytes, False otherwise
+    """
+    if not content or len(content) < 8:
+        return False
+
+    # Common image file signatures (magic bytes)
+    image_signatures = [
+        b'\xFF\xD8\xFF',  # JPEG
+        b'\x89\x50\x4E\x47\x0D\x0A\x1A\x0A',  # PNG
+        b'GIF87a',  # GIF87a
+        b'GIF89a',  # GIF89a
+        b'BM',  # BMP
+        b'II*\x00',  # TIFF (little-endian)
+        b'MM\x00*',  # TIFF (big-endian)
+        b'\x00\x00\x01\x00',  # ICO
+        b'\x52\x49\x46\x46',  # WEBP (RIFF)
+    ]
+
+    return any(content.startswith(sig) for sig in image_signatures)
+
 # Initialize FastMCP server
 mcp = FastMCP("fetch-image-mcp-server")
 
@@ -72,6 +101,15 @@ def download_image_from_url(image_url: str, timeout: int = 30) -> tuple[bytes, s
         content_type = response.headers.get('Content-Type', '')
         if content_type.startswith('image/'):
             mime_type = content_type
+
+        # Validate that the content is actually an image
+        if not is_valid_image(response.content):
+            # Provide helpful error message
+            content_preview = response.content[:200].decode('utf-8', errors='ignore')
+            if '<html' in content_preview.lower() or '<!doctype' in content_preview.lower():
+                return None, None, f"The URL does not point to a valid image. The response appears to be an HTML page (possibly a redirect page or error page). URL: {image_url}"
+            else:
+                return None, None, f"The URL does not point to a valid image. Content-Type: {content_type}, URL: {image_url}"
 
         return response.content, mime_type, ""
 

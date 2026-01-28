@@ -8,6 +8,7 @@ https://github.com/MiroMindAI/MiroRL/blob/5073693549ffe05a157a1886e87650ef3be660
 
 import base64
 import json
+import logging
 import os
 from typing import Any, Dict, List
 
@@ -22,6 +23,8 @@ from tenacity import (
 
 from .utils import decode_http_urls_in_dict
 from .utils.search_cache import get_search_cache
+
+logger = logging.getLogger(__name__)
 
 
 def download_and_encode_images(
@@ -180,7 +183,7 @@ def google_search(
 
     cached_result = cache.get("google_search", q, **cache_params)
     if cached_result is not None:
-        print(f"[SEARCH_CACHE] Cache HIT for google_search: '{q}'")
+        logger.info(f"[SEARCH_CACHE] Cache HIT for google_search: '{q}'")
         return cached_result
 
     try:
@@ -394,7 +397,7 @@ def image_search(
 
     cached_result = cache.get("image_search", q, **cache_params)
     if cached_result is not None:
-        print(f"[SEARCH_CACHE] Cache HIT for image_search: '{q}'")
+        logger.info(f"[SEARCH_CACHE] Cache HIT for image_search: '{q}'")
         return cached_result
 
     try:

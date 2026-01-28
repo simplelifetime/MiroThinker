@@ -3,11 +3,14 @@
 
 """
 Search cache management for serper-based search tools.
+Uses SQLite database for thread-safe concurrent access.
 """
 
 import hashlib
 import json
 import os
+import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -16,7 +19,8 @@ class SearchCache:
     """
     Cache manager for search tool results.
 
-    Stores search results in a JSON file with keys based on tool name and parameters.
+    Stores search results in a SQLite database with keys based on tool name and parameters.
+    Thread-safe for concurrent access from multiple threads.
     """
 
     def __init__(self, cache_path: Optional[str] = None, enabled: Optional[bool] = None):
@@ -24,7 +28,7 @@ class SearchCache:
         Initialize the search cache.
 
         Args:
-            cache_path: Path to the cache file. If None, uses default path.
+            cache_path: Path to the cache database file. If None, uses default path.
             enabled: Whether caching is enabled. If None, checks MIROFLOW_SEARCH_CACHE_ENABLED env var.
         """
         # Check if caching is disabled via environment variable
@@ -34,42 +38,114 @@ class SearchCache:
         else:
             self.enabled = enabled
 
+        # Thread lock for SQLite operations (Python sqlite3 requires locks for multi-threaded access)
+        self._lock = threading.Lock()
+
+        # Performance statistics
+        self._hit_count = 0
+        self._miss_count = 0
+
         if not self.enabled:
-            self._cache: Dict[str, Any] = {}
-            self.cache_path = None
+            self.db_path = None
+            self._conn = None
             return
 
         if cache_path is None:
             # Default cache path in user's home directory
             cache_dir = Path.home() / "MiroThinker" / ".miroflow_tools" / "cache"
             cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_path = cache_dir / "search_cache.json"
+            cache_path = cache_dir / "search_cache.db"
 
-        self.cache_path = Path(cache_path)
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._cache: Dict[str, Any] = {}
-        self._load_cache()
+        self.db_path = Path(cache_path)
+        # Ensure parent directory exists
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _load_cache(self):
-        """Load cache from file."""
-        if self.cache_path.exists():
-            try:
-                with open(self.cache_path, "r", encoding="utf-8") as f:
-                    self._cache = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                self._cache = {}
-        else:
-            self._cache = {}
+        # Initialize SQLite database
+        self._init_db()
 
-    def _save_cache(self):
-        """Save cache to file."""
+    def _init_db(self):
+        """Initialize SQLite database and create tables if they don't exist."""
+        self._conn = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False,  # Allow sharing connection across threads with manual locking
+            timeout=30.0  # Wait up to 30 seconds for lock
+        )
+
+        # Enable WAL mode for better concurrent access
+        with self._lock:
+            self._conn.execute('PRAGMA journal_mode=WAL')
+            self._conn.execute('PRAGMA synchronous=NORMAL')
+
+            # Create cache table
+            self._conn.execute('''
+                CREATE TABLE IF NOT EXISTS search_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    tool_name TEXT NOT NULL,
+                    query TEXT NOT NULL,
+                    params TEXT,
+                    result TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # Create statistics table
+            self._conn.execute('''
+                CREATE TABLE IF NOT EXISTS cache_statistics (
+                    id INTEGER PRIMARY KEY,
+                    hit_count INTEGER DEFAULT 0,
+                    miss_count INTEGER DEFAULT 0,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # Initialize statistics if not exists
+            cursor = self._conn.execute('SELECT COUNT(*) FROM cache_statistics')
+            if cursor.fetchone()[0] == 0:
+                self._conn.execute('INSERT INTO cache_statistics (id, hit_count, miss_count) VALUES (1, 0, 0)')
+                self._conn.commit()
+
+            # Load existing statistics
+            cursor = self._conn.execute('SELECT hit_count, miss_count FROM cache_statistics WHERE id = 1')
+            row = cursor.fetchone()
+            if row:
+                self._hit_count = row[0] or 0
+                self._miss_count = row[1] or 0
+
+            # Create indexes for faster queries
+            self._conn.execute('CREATE INDEX IF NOT EXISTS idx_tool_name ON search_cache(tool_name)')
+            self._conn.execute('CREATE INDEX IF NOT EXISTS idx_created_at ON search_cache(created_at)')
+
+            self._conn.commit()
+
+    def _update_statistics(self):
+        """Update statistics in database."""
         if not self.enabled:
             return
         try:
-            with open(self.cache_path, "w", encoding="utf-8") as f:
-                json.dump(self._cache, f, ensure_ascii=False, indent=2)
-        except IOError as e:
-            print(f"Warning: Failed to save cache to {self.cache_path}: {e}")
+            with self._lock:
+                self._conn.execute('''
+                    UPDATE cache_statistics
+                    SET hit_count = ?, miss_count = ?, last_updated = CURRENT_TIMESTAMP
+                    WHERE id = 1
+                ''', (self._hit_count, self._miss_count))
+                self._conn.commit()
+        except Exception:
+            pass  # Ignore errors updating statistics
+
+    def _update_access_time(self, cache_key: str):
+        """Update the last accessed time for a cache entry."""
+        if not self.enabled:
+            return
+        try:
+            with self._lock:
+                self._conn.execute(
+                    'UPDATE search_cache SET accessed_at = CURRENT_TIMESTAMP WHERE cache_key = ?',
+                    (cache_key,)
+                )
+                self._conn.commit()
+        except Exception:
+            pass  # Ignore errors updating access time
 
     def _generate_cache_key(
         self, tool_name: str, query: str, **kwargs
@@ -116,10 +192,36 @@ class SearchCache:
 
         cache_key = self._generate_cache_key(tool_name, query, **kwargs)
 
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        try:
+            with self._lock:
+                cursor = self._conn.execute(
+                    'SELECT result FROM search_cache WHERE cache_key = ?',
+                    (cache_key,)
+                )
+                row = cursor.fetchone()
 
-        return None
+                if row:
+                    # Cache hit!
+                    result = row[0]
+                    self._hit_count += 1
+                    # Update access time in the same transaction
+                    self._conn.execute(
+                        'UPDATE search_cache SET accessed_at = CURRENT_TIMESTAMP WHERE cache_key = ?',
+                        (cache_key,)
+                    )
+                    self._update_statistics()
+                    self._conn.commit()
+                    return result
+                else:
+                    # Cache miss
+                    self._miss_count += 1
+                    self._update_statistics()
+                    self._conn.commit()
+                    return None
+        except Exception:
+            # On error, count as miss
+            self._miss_count += 1
+            return None
 
     def set(self, tool_name: str, query: str, result: str, **kwargs):
         """
@@ -135,15 +237,31 @@ class SearchCache:
             return
 
         cache_key = self._generate_cache_key(tool_name, query, **kwargs)
-        self._cache[cache_key] = result
-        self._save_cache()
+
+        # Serialize kwargs to JSON for storage
+        params_str = json.dumps(kwargs, sort_keys=True) if kwargs else None
+
+        try:
+            with self._lock:
+                # Use INSERT OR REPLACE to handle both new entries and updates
+                self._conn.execute('''
+                    INSERT OR REPLACE INTO search_cache (cache_key, tool_name, query, params, result)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (cache_key, tool_name, query, params_str, result))
+                self._conn.commit()
+        except Exception as e:
+            print(f"Warning: Failed to save cache entry: {e}")
 
     def clear(self):
         """Clear all cached results."""
         if not self.enabled:
             return
-        self._cache = {}
-        self._save_cache()
+        try:
+            with self._lock:
+                self._conn.execute('DELETE FROM search_cache')
+                self._conn.commit()
+        except Exception as e:
+            print(f"Warning: Failed to clear cache: {e}")
 
     def remove(self, tool_name: str, query: str, **kwargs):
         """
@@ -157,9 +275,58 @@ class SearchCache:
         if not self.enabled:
             return
         cache_key = self._generate_cache_key(tool_name, query, **kwargs)
-        if cache_key in self._cache:
-            del self._cache[cache_key]
-            self._save_cache()
+        try:
+            with self._lock:
+                self._conn.execute('DELETE FROM search_cache WHERE cache_key = ?', (cache_key,))
+                self._conn.commit()
+        except Exception as e:
+            print(f"Warning: Failed to remove cache entry: {e}")
+
+    def get_statistics(self) -> Dict[str, int]:
+        """
+        Get cache performance statistics.
+
+        Returns:
+            Dictionary containing:
+                - hit_count: Number of cache hits
+                - miss_count: Number of cache misses
+                - total_queries: Total number of queries (hits + misses)
+                - hit_rate: Cache hit rate as percentage (0-100)
+                - total_entries: Total number of cached entries
+        """
+        if not self.enabled:
+            return {
+                "hit_count": 0,
+                "miss_count": 0,
+                "total_queries": 0,
+                "hit_rate": 0.0,
+                "total_entries": 0
+            }
+
+        total_queries = self._hit_count + self._miss_count
+        hit_rate = (self._hit_count / total_queries * 100) if total_queries > 0 else 0.0
+
+        # Get total entries from cache
+        cursor = self._conn.execute('SELECT COUNT(*) FROM search_cache')
+        total_entries = cursor.fetchone()[0]
+
+        return {
+            "hit_count": self._hit_count,
+            "miss_count": self._miss_count,
+            "total_queries": total_queries,
+            "hit_rate": hit_rate,
+            "total_entries": total_entries
+        }
+
+    def reset_statistics(self):
+        """Reset hit/miss counters to zero."""
+        if not self.enabled:
+            return
+        with self._lock:
+            self._hit_count = 0
+            self._miss_count = 0
+            self._update_statistics()
+            self._conn.commit()
 
 
 # Global cache instance (can be configured via environment variable)
