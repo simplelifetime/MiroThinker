@@ -125,31 +125,17 @@ def download_image_from_url(image_url: str, timeout: int = 30) -> tuple[bytes, s
 async def fetch_image(url: str) -> str:
     """Download an image from a URL and load it into the agent's context.
 
-    This tool downloads an image from the provided URL and converts it to base64 format,
-    then returns it in a multi-modal format that can be directly processed by vision-capable
-    LLMs. The image will be included in the conversation history for visual analysis.
+    This tool downloads an image and converts it to base64 format for vision-capable LLMs.
 
     Args:
         url: The URL of the image to download. Must start with http:// or https://
 
     Returns:
-        A JSON-formatted string containing the image data in multi-modal format.
-        The format is a list with two elements:
-        1. A text description of the image source
-        2. The image data in base64 format with appropriate MIME type
-
-    Example:
-        Image downloaded from https://example.com/image.jpg will be returned as:
-        [
-            {"type": "text", "text": "Image downloaded from: https://example.com/image.jpg"},
-            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
-        ]
+        JSON-formatted multi-modal content with text description and base64-encoded image
 
     Note:
-        - Supported image formats: jpg, jpeg, png, gif, webp, bmp, etc.
-        - Maximum download timeout: 30 seconds
-        - The image is automatically encoded to base64 for inclusion in the context
-        - Vision-capable models will be able to directly analyze the downloaded image
+        - Supported formats: jpg, png, gif, webp, bmp, etc.
+        - Maximum timeout: 30 seconds
     """
     # Download image
     image_bytes, mime_type, error_message = download_image_from_url(url)

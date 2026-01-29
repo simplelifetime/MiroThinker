@@ -124,10 +124,21 @@ async def google_search(
         arguments["location"] = location
     if tbs:
         arguments["tbs"] = tbs
+    # Prepare environment variables, inheriting from current environment
+    server_env = {
+        "SERPER_API_KEY": SERPER_API_KEY,
+        "SERPER_BASE_URL": SERPER_BASE_URL,
+    }
+    # Pass through MIROFLOW_SEARCH_CACHE_ENABLED if set
+    if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
+        server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
+    if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
+        server_env["MIROFLOW_SEARCH_CACHE_PATH"] = os.environ["MIROFLOW_SEARCH_CACHE_PATH"]
+
     server_params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "miroflow_tools.mcp_servers.serper_mcp_server"],
-        env={"SERPER_API_KEY": SERPER_API_KEY, "SERPER_BASE_URL": SERPER_BASE_URL},
+        env=server_env,
     )
     result_content = ""
 
@@ -654,10 +665,7 @@ async def scholar_search(
     page: int = 1,
 ) -> str:
     """Perform academic searches via Google Scholar through Serper API.
-
-    Retrieve scholarly literature including articles, theses, books,
-    abstracts, and court opinions from academic publishers, professional
-    societies, online repositories, and universities.
+    It is able to retrieve scholarly literature including articles, theses, books, and abstracts.
 
     Args:
         q: Search query string for academic literature.
@@ -682,10 +690,21 @@ async def scholar_search(
         "num": num,
         "page": page,
     }
+    # Prepare environment variables, inheriting from current environment
+    server_env = {
+        "SERPER_API_KEY": SERPER_API_KEY,
+        "SERPER_BASE_URL": SERPER_BASE_URL,
+    }
+    # Pass through MIROFLOW_SEARCH_CACHE_ENABLED if set
+    if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
+        server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
+    if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
+        server_env["MIROFLOW_SEARCH_CACHE_PATH"] = os.environ["MIROFLOW_SEARCH_CACHE_PATH"]
+
     server_params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "miroflow_tools.mcp_servers.serper_mcp_server"],
-        env={"SERPER_API_KEY": SERPER_API_KEY, "SERPER_BASE_URL": SERPER_BASE_URL},
+        env=server_env,
     )
     result_content = ""
 
@@ -729,8 +748,7 @@ async def image_search(
     page: int = 1,
 ) -> str:
     """Perform image searches via Serper API and retrieve visual results.
-
-    Retrieve image search results including thumbnails, titles, and source URLs.
+    It is able to retrieve image search results including thumbnails, titles, and source URLs.
 
     Args:
         q: Search query string for images.
@@ -758,10 +776,21 @@ async def image_search(
     }
     if location:
         arguments["location"] = location
+    # Prepare environment variables, inheriting from current environment
+    server_env = {
+        "SERPER_API_KEY": SERPER_API_KEY,
+        "SERPER_BASE_URL": SERPER_BASE_URL,
+    }
+    # Pass through MIROFLOW_SEARCH_CACHE_ENABLED if set
+    if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
+        server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
+    if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
+        server_env["MIROFLOW_SEARCH_CACHE_PATH"] = os.environ["MIROFLOW_SEARCH_CACHE_PATH"]
+
     server_params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "miroflow_tools.mcp_servers.serper_mcp_server"],
-        env={"SERPER_API_KEY": SERPER_API_KEY, "SERPER_BASE_URL": SERPER_BASE_URL},
+        env=server_env,
     )
     result_content = ""
 
@@ -805,8 +834,7 @@ async def visual_search(
     page: int = 1,
 ) -> str:
     """Perform visual searches via Serper Lens API to find similar images.
-
-    Given an image URL, retrieve visually similar images from across the web.
+    Given an image URL, it is able to retrieve visually similar images from across the web.
 
     Args:
         image_url: URL of the image to search with.
@@ -834,10 +862,21 @@ async def visual_search(
     }
     if location:
         arguments["location"] = location
+    # Prepare environment variables, inheriting from current environment
+    server_env = {
+        "SERPER_API_KEY": SERPER_API_KEY,
+        "SERPER_BASE_URL": SERPER_BASE_URL,
+    }
+    # Pass through MIROFLOW_SEARCH_CACHE_ENABLED if set
+    if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
+        server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
+    if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
+        server_env["MIROFLOW_SEARCH_CACHE_PATH"] = os.environ["MIROFLOW_SEARCH_CACHE_PATH"]
+
     server_params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "miroflow_tools.mcp_servers.serper_mcp_server"],
-        env={"SERPER_API_KEY": SERPER_API_KEY, "SERPER_BASE_URL": SERPER_BASE_URL},
+        env=server_env,
     )
     result_content = ""
 

@@ -12,6 +12,10 @@ Tools provided:
 - Rotation: Rotate an image by a specified angle
 - Flip: Flip an image horizontally or vertically
 - PutBox: Add a bounding box annotation to an image
+
+IMPORTANT: All image processing tools can ONLY process images that have already been
+loaded into the agent's context (through search results, fetch_image, or other image tools).
+Do NOT use these tools on images that the agent has not yet viewed.
 """
 
 import base64
@@ -244,26 +248,16 @@ async def zoom_in(
 ) -> str:
     """Zoom in on a specific rectangular region of an image.
 
-    This tool extracts and enlarges a specific region of an image,
-    useful for focusing on details or areas of interest.
-
-    IMPORTANT: This tool can ONLY process images that have already been loaded into
-    the agent's context (through search results, fetch_image, or other image tools).
-    Do NOT use this tool on images that the agent has not yet viewed.
-
     Args:
         image_url: URL of the image to process (must start with http:// or https://)
-        x: X coordinate of the top-left corner of the region to zoom (in pixels)
-        y: Y coordinate of the top-left corner of the region to zoom (in pixels)
-        width: Width of the region to zoom (in pixels)
-        height: Height of the region to zoom (in pixels)
-        output_format: Output image format ('PNG', 'JPEG', etc.). Default is 'PNG'
+        x: X coordinate of the top-left corner (in pixels)
+        y: Y coordinate of the top-left corner (in pixels)
+        width: Width of the region (in pixels)
+        height: Height of the region (in pixels)
+        output_format: Output format ('PNG', 'JPEG', etc.). Default: 'PNG'
 
     Returns:
         JSON-formatted multi-modal content with text description and base64-encoded image
-
-    Example:
-        zoom_in(image_url="https://example.com/image.jpg", x=100, y=100, width=200, height=200)
     """
     # Load image from URL
     image, error = load_image_from_url(image_url)
@@ -331,21 +325,14 @@ async def rotate(
 ) -> str:
     """Rotate an image by a specified angle.
 
-    IMPORTANT: This tool can ONLY process images that have already been loaded into
-    the agent's context (through search results, fetch_image, or other image tools).
-    Do NOT use this tool on images that the agent has not yet viewed.
-
     Args:
         image_url: URL of the image to process (must start with http:// or https://)
-        angle: Rotation angle in degrees (counter-clockwise). Positive values rotate counter-clockwise, negative values rotate clockwise
-        expand: If True, expands the output image to fit the entire rotated image. If False, keeps the original dimensions (default: False)
-        output_format: Output image format ('PNG', 'JPEG', etc.). Default is 'PNG'
+        angle: Rotation angle in degrees (positive: counter-clockwise, negative: clockwise)
+        expand: If True, expands output to fit entire rotated image. Default: False
+        output_format: Output format ('PNG', 'JPEG', etc.). Default: 'PNG'
 
     Returns:
         JSON-formatted multi-modal content with text description and base64-encoded image
-
-    Example:
-        rotate(image_url="https://example.com/image.jpg", angle=45, expand=True)
     """
     # Load image from URL
     image, error = load_image_from_url(image_url)
@@ -406,20 +393,13 @@ async def flip(
 ) -> str:
     """Flip an image horizontally or vertically.
 
-    IMPORTANT: This tool can ONLY process images that have already been loaded into
-    the agent's context (through search results, fetch_image, or other image tools).
-    Do NOT use this tool on images that the agent has not yet viewed.
-
     Args:
         image_url: URL of the image to process (must start with http:// or https://)
-        direction: Flip direction - 'horizontal' for left-right flip, 'vertical' for top-bottom flip
-        output_format: Output image format ('PNG', 'JPEG', etc.). Default is 'PNG'
+        direction: 'horizontal' for left-right flip, 'vertical' for top-bottom flip
+        output_format: Output format ('PNG', 'JPEG', etc.). Default: 'PNG'
 
     Returns:
         JSON-formatted multi-modal content with text description and base64-encoded image
-
-    Example:
-        flip(image_url="https://example.com/image.jpg", direction="horizontal")
     """
     # Load image from URL
     image, error = load_image_from_url(image_url)
@@ -492,29 +472,19 @@ async def put_box(
 ) -> str:
     """Add a bounding box annotation to an image.
 
-    This tool draws a rectangle on the image to highlight a specific region,
-    useful for marking objects or areas of interest.
-
-    IMPORTANT: This tool can ONLY process images that have already been loaded into
-    the agent's context (through search results, fetch_image, or other image tools).
-    Do NOT use this tool on images that the agent has not yet viewed.
-
     Args:
         image_url: URL of the image to process (must start with http:// or https://)
-        x1: X coordinate of the top-left corner of the box (in pixels)
-        y1: Y coordinate of the top-left corner of the box (in pixels)
-        x2: X coordinate of the bottom-right corner of the box (in pixels)
-        y2: Y coordinate of the bottom-right corner of the box (in pixels)
-        color: Box color name (e.g., 'red', 'blue', 'green') or hex code (e.g., '#FF0000'). Default is 'red'
-        line_width: Width of the box border in pixels. Default is 3
-        label: Optional text label to display above the box (e.g., 'object', 'region 1')
-        output_format: Output image format ('PNG', 'JPEG', etc.). Default is 'PNG'
+        x1: X coordinate of the top-left corner (in pixels)
+        y1: Y coordinate of the top-left corner (in pixels)
+        x2: X coordinate of the bottom-right corner (in pixels)
+        y2: Y coordinate of the bottom-right corner (in pixels)
+        color: Box color (name or hex code). Default: 'red'
+        line_width: Box border width in pixels. Default: 3
+        label: Optional text label above the box
+        output_format: Output format ('PNG', 'JPEG', etc.). Default: 'PNG'
 
     Returns:
         JSON-formatted multi-modal content with text description and base64-encoded image
-
-    Example:
-        put_box(image_url="https://example.com/image.jpg", x1=50, y1=50, x2=150, y2=150, color="red", label="object 1")
     """
     # Load image from URL
     image, error = load_image_from_url(image_url)
@@ -602,21 +572,11 @@ async def put_box(
 async def get_image_info(image_url: str) -> str:
     """Get basic information about an image.
 
-    This tool returns metadata about an image including its dimensions,
-    format, and mode (RGB, RGBA, etc.).
-
-    IMPORTANT: This tool can ONLY process images that have already been loaded into
-    the agent's context (through search results, fetch_image, or other image tools).
-    Do NOT use this tool on images that the agent has not yet viewed.
-
     Args:
         image_url: URL of the image to analyze (must start with http:// or https://)
 
     Returns:
-        String with image information (dimensions, format, mode), or error message if failed
-
-    Example:
-        get_image_info(image_url="https://example.com/image.jpg")
+        String with image information (dimensions, format, mode)
     """
     # Load image from URL
     image, error = load_image_from_url(image_url)

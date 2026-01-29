@@ -1,5 +1,12 @@
 from .url_unquote import decode_http_urls_in_dict, safe_unquote, strip_markdown_links
-from .search_cache import SearchCache, get_search_cache, reset_search_cache
+from .search_cache import (
+    SearchCache,
+    get_search_cache,
+    reset_search_cache,
+    set_current_task_id,
+    get_current_task_id,
+    cleanup_task_cache,
+)
 
 __all__ = [
     "safe_unquote",
@@ -8,4 +15,7 @@ __all__ = [
     "SearchCache",
     "get_search_cache",
     "reset_search_cache",
+    "set_current_task_id",
+    "get_current_task_id",
+    "cleanup_task_cache",
 ]

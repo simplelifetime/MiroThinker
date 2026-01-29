@@ -37,8 +37,23 @@ def _task_worker(task_dict, cfg_dict, evaluator_kwargs):
     This function is called by ProcessPoolExecutor and must be at module level.
     """
     import asyncio
+    import os
 
     from omegaconf import OmegaConf
+
+    # Extract task_id early for cache initialization
+    task_id = task_dict["task_id"]
+
+    # Set task_id in context so all search operations use the task-specific cache
+    from miroflow_tools.mcp_servers.utils.search_cache import set_current_task_id
+    set_current_task_id(task_id)
+    print(f"[Worker] Set task_id in context: {task_id}")
+
+    # Initialize task-specific search cache BEFORE creating evaluator
+    # This ensures all search operations in this task use the same cache instance
+    from miroflow_tools.mcp_servers.utils.search_cache import get_search_cache
+    task_cache = get_search_cache(task_id=task_id)
+    print(f"[Worker] Initialized task-specific cache for task: {task_id}")
 
     # Reconstruct config in this process
     cfg = OmegaConf.create(cfg_dict)
@@ -81,6 +96,20 @@ def _task_worker(task_dict, cfg_dict, evaluator_kwargs):
         return asdict(result)
     finally:
         loop.close()
+
+        # Save task-specific search cache after task completes
+        try:
+            task_cache.save_to_file()
+            print(f"[Worker] Saved task-specific cache for task: {task_id}")
+        except Exception as e:
+            print(f"Warning: Failed to save search cache for task {task_id}: {e}")
+
+        # Clean up task cache instance to free memory
+        try:
+            from miroflow_tools.mcp_servers.utils.search_cache import cleanup_task_cache
+            cleanup_task_cache(task_id)
+        except Exception as e:
+            print(f"Warning: Failed to cleanup cache instance for task {task_id}: {e}")
 
 
 @dataclass
@@ -701,6 +730,18 @@ class BenchmarkEvaluator(ABC):
                 except Exception:
                     pass  # Ignore errors during cleanup
 
+            # Merge search caches from all processes after all workers complete
+            try:
+                from miroflow_tools.mcp_servers.utils.search_cache import SearchCache
+                print("\n" + "="*60)
+                print("Merging search caches from all processes...")
+                print("="*60)
+                merged_count = SearchCache.merge_caches()
+                print(f"Search cache merge completed: {merged_count} total entries")
+                print("="*60 + "\n")
+            except Exception as e:
+                print(f"Warning: Failed to merge search caches: {e}")
+
         # Reconstruct results in original task order
         processed_results = [results_dict[task.task_id] for task in shuffled_tasks]
 
@@ -1002,6 +1043,18 @@ class CommonBenchmark:
             f.write(f"{accuracy:.2%}")
         # Generate and save summary
         generate_summary(log_dir)
+
+        # Save search cache (for non-multiprocessing runs)
+        # Note: For multiprocessing runs, cache is saved in worker processes and merged in run_parallel_inference
+        try:
+            from miroflow_tools.mcp_servers.utils.search_cache import get_search_cache
+            cache = get_search_cache()
+            if cache._memory_cache:  # Only save if cache was used
+                cache.save_to_file()
+                print(f"Saved search cache with {len(cache._memory_cache)} entries")
+        except Exception as e:
+            print(f"Warning: Failed to save search cache: {e}")
+
         return accuracy
 
 

@@ -3,33 +3,45 @@
 
 """
 Search cache management for serper-based search tools.
-Uses SQLite database for thread-safe concurrent access.
+Uses JSON file-based cache with support for multi-task scenarios.
+
+Design:
+- Single task: Loads global cache, operates in memory, saves back on task completion
+- Multi-task: Each task loads a copy of global cache, operates independently,
+  saves to task-specific file (search_cache_task{task_id}.json), then merges all at the end
 """
 
 import hashlib
 import json
 import os
-import sqlite3
 import threading
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+# Context variable to store the current task_id
+# This allows task-specific cache to be used throughout the call stack
+_current_task_id: ContextVar[str] = ContextVar('_current_task_id', default=None)
 
 
 class SearchCache:
     """
-    Cache manager for search tool results.
+    JSON file-based cache manager for search tool results.
 
-    Stores search results in a SQLite database with keys based on tool name and parameters.
-    Thread-safe for concurrent access from multiple threads.
+    Thread-safe for concurrent access from multiple threads within the same process.
+    Multi-process safe through per-process cache files with merge on exit.
     """
 
-    def __init__(self, cache_path: Optional[str] = None, enabled: Optional[bool] = None):
+    def __init__(self, cache_path: Optional[str] = None, enabled: Optional[bool] = None,
+                 task_id: Optional[str] = None):
         """
         Initialize the search cache.
 
         Args:
-            cache_path: Path to the cache database file. If None, uses default path.
+            cache_path: Path to the global cache JSON file. If None, uses default path.
             enabled: Whether caching is enabled. If None, checks MIROFLOW_SEARCH_CACHE_ENABLED env var.
+            task_id: Optional task identifier for task-specific caching. If provided, cache will be
+                    saved to search_cache_task{task_id}.json instead of a process-specific file.
         """
         # Check if caching is disabled via environment variable
         if enabled is None:
@@ -38,114 +50,64 @@ class SearchCache:
         else:
             self.enabled = enabled
 
-        # Thread lock for SQLite operations (Python sqlite3 requires locks for multi-threaded access)
+        # Thread lock for thread-safe operations
         self._lock = threading.Lock()
 
         # Performance statistics
         self._hit_count = 0
         self._miss_count = 0
 
+        # Flag to avoid duplicate saves
+        self._saved = False
+
+        # Task ID for task-specific caching
+        self.task_id = task_id
+
         if not self.enabled:
-            self.db_path = None
-            self._conn = None
+            self._memory_cache = None
+            self.global_cache_file = None
+            self.task_cache_file = None
             return
 
+        # Determine cache directory
         if cache_path is None:
-            # Default cache path in user's home directory
             cache_dir = Path.home() / "MiroThinker" / ".miroflow_tools" / "cache"
             cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_path = cache_dir / "search_cache.db"
+            cache_path = cache_dir / "search_cache.json"
 
-        self.db_path = Path(cache_path)
-        # Ensure parent directory exists
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.global_cache_file = Path(cache_path)
 
-        # Initialize SQLite database
-        self._init_db()
+        # Determine task-specific cache file if task_id is provided
+        cache_dir = self.global_cache_file.parent
+        if task_id:
+            # Sanitize task_id to make it safe for filename
+            safe_task_id = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in str(task_id))
+            self.task_cache_file = cache_dir / f"search_cache_task{safe_task_id}.json"
+        else:
+            # Fallback to process-specific file for backward compatibility
+            pid = os.getpid()
+            self.task_cache_file = cache_dir / f"search_cache_pid{pid}.json"
 
-    def _init_db(self):
-        """Initialize SQLite database and create tables if they don't exist."""
-        self._conn = sqlite3.connect(
-            str(self.db_path),
-            check_same_thread=False,  # Allow sharing connection across threads with manual locking
-            timeout=30.0  # Wait up to 30 seconds for lock
-        )
+        # Load global cache into memory (if exists), otherwise start with empty dict
+        self._memory_cache = {}
+        self._load_cache()
 
-        # Enable WAL mode for better concurrent access
-        with self._lock:
-            self._conn.execute('PRAGMA journal_mode=WAL')
-            self._conn.execute('PRAGMA synchronous=NORMAL')
-
-            # Create cache table
-            self._conn.execute('''
-                CREATE TABLE IF NOT EXISTS search_cache (
-                    cache_key TEXT PRIMARY KEY,
-                    tool_name TEXT NOT NULL,
-                    query TEXT NOT NULL,
-                    params TEXT,
-                    result TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-
-            # Create statistics table
-            self._conn.execute('''
-                CREATE TABLE IF NOT EXISTS cache_statistics (
-                    id INTEGER PRIMARY KEY,
-                    hit_count INTEGER DEFAULT 0,
-                    miss_count INTEGER DEFAULT 0,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-
-            # Initialize statistics if not exists
-            cursor = self._conn.execute('SELECT COUNT(*) FROM cache_statistics')
-            if cursor.fetchone()[0] == 0:
-                self._conn.execute('INSERT INTO cache_statistics (id, hit_count, miss_count) VALUES (1, 0, 0)')
-                self._conn.commit()
-
-            # Load existing statistics
-            cursor = self._conn.execute('SELECT hit_count, miss_count FROM cache_statistics WHERE id = 1')
-            row = cursor.fetchone()
-            if row:
-                self._hit_count = row[0] or 0
-                self._miss_count = row[1] or 0
-
-            # Create indexes for faster queries
-            self._conn.execute('CREATE INDEX IF NOT EXISTS idx_tool_name ON search_cache(tool_name)')
-            self._conn.execute('CREATE INDEX IF NOT EXISTS idx_created_at ON search_cache(created_at)')
-
-            self._conn.commit()
-
-    def _update_statistics(self):
-        """Update statistics in database."""
+    def _load_cache(self):
+        """Load global cache file into memory."""
         if not self.enabled:
             return
-        try:
-            with self._lock:
-                self._conn.execute('''
-                    UPDATE cache_statistics
-                    SET hit_count = ?, miss_count = ?, last_updated = CURRENT_TIMESTAMP
-                    WHERE id = 1
-                ''', (self._hit_count, self._miss_count))
-                self._conn.commit()
-        except Exception:
-            pass  # Ignore errors updating statistics
 
-    def _update_access_time(self, cache_key: str):
-        """Update the last accessed time for a cache entry."""
-        if not self.enabled:
-            return
-        try:
-            with self._lock:
-                self._conn.execute(
-                    'UPDATE search_cache SET accessed_at = CURRENT_TIMESTAMP WHERE cache_key = ?',
-                    (cache_key,)
-                )
-                self._conn.commit()
-        except Exception:
-            pass  # Ignore errors updating access time
+        if self.global_cache_file.exists():
+            try:
+                with open(self.global_cache_file, 'r', encoding='utf-8') as f:
+                    self._memory_cache = json.load(f)
+                    print(f"[SEARCH_CACHE] Loaded {len(self._memory_cache)} entries from global cache")
+            except Exception as e:
+                print(f"[SEARCH_CACHE] Warning: Failed to load global cache: {e}")
+                self._memory_cache = {}
+        else:
+            self._memory_cache = {}
+            print("[SEARCH_CACHE] No existing global cache found, starting with empty cache")
 
     def _generate_cache_key(
         self, tool_name: str, query: str, **kwargs
@@ -194,29 +156,17 @@ class SearchCache:
 
         try:
             with self._lock:
-                cursor = self._conn.execute(
-                    'SELECT result FROM search_cache WHERE cache_key = ?',
-                    (cache_key,)
-                )
-                row = cursor.fetchone()
-
-                if row:
+                if cache_key in self._memory_cache:
                     # Cache hit!
-                    result = row[0]
+                    entry = self._memory_cache[cache_key]
+                    result = entry["result"]
                     self._hit_count += 1
-                    # Update access time in the same transaction
-                    self._conn.execute(
-                        'UPDATE search_cache SET accessed_at = CURRENT_TIMESTAMP WHERE cache_key = ?',
-                        (cache_key,)
-                    )
-                    self._update_statistics()
-                    self._conn.commit()
+                    # Update access time
+                    entry["accessed_at"] = self._get_current_timestamp()
                     return result
                 else:
                     # Cache miss
                     self._miss_count += 1
-                    self._update_statistics()
-                    self._conn.commit()
                     return None
         except Exception:
             # On error, count as miss
@@ -237,31 +187,54 @@ class SearchCache:
             return
 
         cache_key = self._generate_cache_key(tool_name, query, **kwargs)
+        current_time = self._get_current_timestamp()
 
         # Serialize kwargs to JSON for storage
         params_str = json.dumps(kwargs, sort_keys=True) if kwargs else None
 
         try:
             with self._lock:
-                # Use INSERT OR REPLACE to handle both new entries and updates
-                self._conn.execute('''
-                    INSERT OR REPLACE INTO search_cache (cache_key, tool_name, query, params, result)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (cache_key, tool_name, query, params_str, result))
-                self._conn.commit()
+                self._memory_cache[cache_key] = {
+                    "tool_name": tool_name,
+                    "query": query,
+                    "params": params_str,
+                    "result": result,
+                    "created_at": current_time,
+                    "accessed_at": current_time
+                }
         except Exception as e:
-            print(f"Warning: Failed to save cache entry: {e}")
+            print(f"[SEARCH_CACHE] Warning: Failed to cache entry: {e}")
+
+    def save_to_file(self):
+        """
+        Save current memory cache to task-specific JSON file.
+        This should be called when the task completes.
+        """
+        if not self.enabled or not self._memory_cache:
+            return
+
+        # Avoid duplicate saves
+        if self._saved:
+            return
+
+        try:
+            # Create parent directory if it doesn't exist
+            self.task_cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(self.task_cache_file, 'w', encoding='utf-8') as f:
+                json.dump(self._memory_cache, f, ensure_ascii=False, indent=2)
+
+            self._saved = True
+            print(f"[SEARCH_CACHE] Saved {len(self._memory_cache)} entries to {self.task_cache_file.name}")
+        except Exception as e:
+            print(f"[SEARCH_CACHE] Warning: Failed to save cache to {self.task_cache_file}: {e}")
 
     def clear(self):
-        """Clear all cached results."""
+        """Clear all cached results from memory."""
         if not self.enabled:
             return
-        try:
-            with self._lock:
-                self._conn.execute('DELETE FROM search_cache')
-                self._conn.commit()
-        except Exception as e:
-            print(f"Warning: Failed to clear cache: {e}")
+        with self._lock:
+            self._memory_cache.clear()
 
     def remove(self, tool_name: str, query: str, **kwargs):
         """
@@ -277,12 +250,12 @@ class SearchCache:
         cache_key = self._generate_cache_key(tool_name, query, **kwargs)
         try:
             with self._lock:
-                self._conn.execute('DELETE FROM search_cache WHERE cache_key = ?', (cache_key,))
-                self._conn.commit()
+                if cache_key in self._memory_cache:
+                    del self._memory_cache[cache_key]
         except Exception as e:
-            print(f"Warning: Failed to remove cache entry: {e}")
+            print(f"[SEARCH_CACHE] Warning: Failed to remove cache entry: {e}")
 
-    def get_statistics(self) -> Dict[str, int]:
+    def get_statistics(self) -> Dict[str, Any]:
         """
         Get cache performance statistics.
 
@@ -306,16 +279,12 @@ class SearchCache:
         total_queries = self._hit_count + self._miss_count
         hit_rate = (self._hit_count / total_queries * 100) if total_queries > 0 else 0.0
 
-        # Get total entries from cache
-        cursor = self._conn.execute('SELECT COUNT(*) FROM search_cache')
-        total_entries = cursor.fetchone()[0]
-
         return {
             "hit_count": self._hit_count,
             "miss_count": self._miss_count,
             "total_queries": total_queries,
             "hit_rate": hit_rate,
-            "total_entries": total_entries
+            "total_entries": len(self._memory_cache)
         }
 
     def reset_statistics(self):
@@ -325,22 +294,196 @@ class SearchCache:
         with self._lock:
             self._hit_count = 0
             self._miss_count = 0
-            self._update_statistics()
-            self._conn.commit()
+
+    def _get_current_timestamp(self) -> str:
+        """Get current timestamp in ISO format."""
+        from datetime import datetime
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
+    def merge_caches(cache_dir: Optional[Path] = None) -> int:
+        """
+        Merge all task-specific (and legacy process-specific) cache files into the global cache file.
+
+        This should be called after all tasks have completed.
+
+        Args:
+            cache_dir: Directory containing cache files. If None, uses default directory.
+
+        Returns:
+            Number of entries in the merged global cache
+
+        Example:
+            SearchCache.merge_caches()  # After all tasks complete
+        """
+        # Determine cache directory
+        if cache_dir is None:
+            cache_dir = Path.home() / "MiroThinker" / ".miroflow_tools" / "cache"
+
+        cache_dir = Path(cache_dir)
+        if not cache_dir.exists():
+            print("[SEARCH_CACHE] Cache directory not found")
+            return 0
+
+        # Find all task-specific cache files
+        task_cache_files = list(cache_dir.glob("search_cache_task*.json"))
+
+        # Also find any legacy process-specific cache files for backward compatibility
+        process_cache_files = list(cache_dir.glob("search_cache_pid*.json"))
+
+        # Combine both lists
+        all_cache_files = task_cache_files + process_cache_files
+
+        if not all_cache_files:
+            print("[SEARCH_CACHE] No task cache files found to merge")
+            # Check if global cache exists, return its count
+            global_cache = cache_dir / "search_cache.json"
+            if global_cache.exists():
+                try:
+                    with open(global_cache, 'r', encoding='utf-8') as f:
+                        merged_cache = json.load(f)
+                        return len(merged_cache)
+                except Exception:
+                    pass
+            return 0
+
+        print(f"[SEARCH_CACHE] Found {len(all_cache_files)} cache files to merge "
+              f"({len(task_cache_files)} task files, {len(process_cache_files)} legacy process files)")
+
+        # Load global cache if it exists
+        global_cache_file = cache_dir / "search_cache.json"
+        merged_cache: Dict[str, Any] = {}
+
+        if global_cache_file.exists():
+            try:
+                with open(global_cache_file, 'r', encoding='utf-8') as f:
+                    merged_cache = json.load(f)
+                    print(f"[SEARCH_CACHE] Loaded {len(merged_cache)} entries from existing global cache")
+            except Exception as e:
+                print(f"[SEARCH_CACHE] Warning: Failed to load global cache: {e}")
+                merged_cache = {}
+
+        # Merge each cache file
+        total_new_entries = 0
+        total_updated_entries = 0
+
+        for cache_file in all_cache_files:
+            try:
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    file_cache = json.load(f)
+
+                print(f"[SEARCH_CACHE] Merging {len(file_cache)} entries from {cache_file.name}")
+
+                for cache_key, entry in file_cache.items():
+                    if cache_key not in merged_cache:
+                        # New entry
+                        merged_cache[cache_key] = entry
+                        total_new_entries += 1
+                    else:
+                        # Entry exists, keep the one with more recent access time
+                        existing_time = merged_cache[cache_key].get("accessed_at", "")
+                        new_time = entry.get("accessed_at", "")
+                        if new_time > existing_time:
+                            merged_cache[cache_key] = entry
+                            total_updated_entries += 1
+
+            except Exception as e:
+                print(f"[SEARCH_CACHE] Warning: Failed to process {cache_file.name}: {e}")
+                continue
+
+        # Save merged cache to global cache file
+        try:
+            # Backup existing global cache
+            if global_cache_file.exists():
+                backup_file = cache_dir / "search_cache.json.backup"
+                import shutil
+                shutil.copy2(global_cache_file, backup_file)
+                print(f"[SEARCH_CACHE] Backed up existing global cache to {backup_file.name}")
+
+            # Write merged cache
+            with open(global_cache_file, 'w', encoding='utf-8') as f:
+                json.dump(merged_cache, f, ensure_ascii=False, indent=2)
+
+            print(f"[SEARCH_CACHE] Merged cache saved: {len(merged_cache)} total entries "
+                  f"({total_new_entries} new, {total_updated_entries} updated)")
+
+        except Exception as e:
+            print(f"[SEARCH_CACHE] Error: Failed to save merged cache: {e}")
+            # Continue to cleanup anyway
+
+        # Clean up all cache files (even if merge failed)
+        try:
+            for cache_file in all_cache_files:
+                try:
+                    cache_file.unlink()
+                    print(f"[SEARCH_CACHE] Cleaned up {cache_file.name}")
+                except Exception as e:
+                    print(f"[SEARCH_CACHE] Warning: Failed to delete {cache_file.name}: {e}")
+        except Exception as e:
+            print(f"[SEARCH_CACHE] Warning: Error during cleanup: {e}")
+
+        return len(merged_cache)
 
 
-# Global cache instance (can be configured via environment variable)
+# Global cache instances
 _global_cache: Optional[SearchCache] = None
+_task_caches: Dict[str, SearchCache] = {}  # Task-specific cache instances
 
 
-def get_search_cache() -> SearchCache:
+def set_current_task_id(task_id: str):
     """
-    Get the global search cache instance.
+    Set the current task_id in the context.
+
+    This should be called at the beginning of a task to ensure all search operations
+    use the task-specific cache.
+
+    Args:
+        task_id: The task identifier
+    """
+    _current_task_id.set(task_id)
+
+
+def get_current_task_id() -> Optional[str]:
+    """
+    Get the current task_id from the context.
 
     Returns:
-        SearchCache instance
+        The current task_id, or None if not set
     """
-    global _global_cache
+    return _current_task_id.get(None)
+
+
+def get_search_cache(task_id: Optional[str] = None) -> SearchCache:
+    """
+    Get the search cache instance.
+
+    Args:
+        task_id: Optional task identifier. If provided, returns (or creates) a task-specific cache instance.
+                If None, checks the current context for a task_id. If no task_id in context either,
+                returns the global shared cache instance.
+
+    Returns:
+        SearchCache instance (cached per task_id for efficiency)
+    """
+    global _global_cache, _task_caches
+
+    # Determine which task_id to use
+    effective_task_id = task_id
+
+    if effective_task_id is None:
+        # Check if there's a task_id in the current context
+        effective_task_id = get_current_task_id()
+
+    # If task_id is provided (either explicitly or from context), use task-specific cache
+    if effective_task_id is not None:
+        # Check if we already created a cache instance for this task
+        if effective_task_id not in _task_caches:
+            cache_path = os.getenv("MIROFLOW_SEARCH_CACHE_PATH")
+            _task_caches[effective_task_id] = SearchCache(cache_path=cache_path, task_id=effective_task_id)
+            print(f"[SEARCH_CACHE] Created new cache instance for task: {effective_task_id}")
+        return _task_caches[effective_task_id]
+
+    # Otherwise, use the global shared cache (for backward compatibility)
     if _global_cache is None:
         cache_path = os.getenv("MIROFLOW_SEARCH_CACHE_PATH")
         _global_cache = SearchCache(cache_path=cache_path)
@@ -349,5 +492,21 @@ def get_search_cache() -> SearchCache:
 
 def reset_search_cache():
     """Reset the global search cache instance."""
-    global _global_cache
+    global _global_cache, _task_caches
     _global_cache = None
+    _task_caches.clear()
+
+
+def cleanup_task_cache(task_id: str):
+    """
+    Clean up a task-specific cache instance after the task completes.
+
+    This should be called after saving the task cache to free up memory.
+
+    Args:
+        task_id: The task identifier to clean up
+    """
+    global _task_caches
+    if task_id in _task_caches:
+        del _task_caches[task_id]
+        print(f"[SEARCH_CACHE] Cleaned up cache instance for task: {task_id}")

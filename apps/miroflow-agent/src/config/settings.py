@@ -94,6 +94,19 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig):
                 "SERPER_API_KEY not set, tool-google-search will be unavailable."
             )
 
+        # Prepare environment variables for google search MCP server
+        google_search_env = {
+            "SERPER_API_KEY": SERPER_API_KEY,
+            "SERPER_BASE_URL": SERPER_BASE_URL,
+            "JINA_API_KEY": JINA_API_KEY,
+            "JINA_BASE_URL": JINA_BASE_URL,
+        }
+        # Pass through MIROFLOW_SEARCH_CACHE_* if set
+        if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
+            google_search_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
+        if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
+            google_search_env["MIROFLOW_SEARCH_CACHE_PATH"] = os.environ["MIROFLOW_SEARCH_CACHE_PATH"]
+
         configs.append(
             {
                 "name": "tool-google-search",
@@ -103,12 +116,7 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig):
                         "-m",
                         "miroflow_tools.mcp_servers.searching_google_mcp_server",
                     ],
-                    env={
-                        "SERPER_API_KEY": SERPER_API_KEY,
-                        "SERPER_BASE_URL": SERPER_BASE_URL,
-                        "JINA_API_KEY": JINA_API_KEY,
-                        "JINA_BASE_URL": JINA_BASE_URL,
-                    },
+                    env=google_search_env,
                 ),
             }
         )
