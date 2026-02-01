@@ -37,7 +37,7 @@ def _task_worker(task_dict, cfg_dict, evaluator_kwargs):
     This function is called by ProcessPoolExecutor and must be at module level.
     """
     import asyncio
-    import hydra
+
     from omegaconf import OmegaConf
 
     # Reconstruct config in this process
@@ -532,6 +532,8 @@ class BenchmarkEvaluator(ABC):
                     break
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             result.error_message = str(e)
             result.status = "failed"
             print(f"Error processing task {task.task_id}: {e}")

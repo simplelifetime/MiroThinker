@@ -8,6 +8,10 @@ Search cache management for serper-based search tools.
 import hashlib
 import json
 import os
+
+import sqlite3
+import sys
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -27,6 +31,9 @@ class SearchCache:
             cache_path: Path to the cache file. If None, uses default path.
             enabled: Whether caching is enabled. If None, checks MIROFLOW_SEARCH_CACHE_ENABLED env var.
         """
+        env_debug = os.getenv("MIROFLOW_SEARCH_CACHE_DEBUG", "false").lower()
+        self._debug = env_debug in ("true", "1", "yes", "on")
+
         # Check if caching is disabled via environment variable
         if enabled is None:
             env_enabled = os.getenv("MIROFLOW_SEARCH_CACHE_ENABLED", "true").lower()
@@ -63,6 +70,7 @@ class SearchCache:
 
     def _save_cache(self):
         """Save cache to file."""
+
         if not self.enabled:
             return
         try:
@@ -112,14 +120,18 @@ class SearchCache:
             Cached JSON string result, or None if not found or cache is disabled
         """
         if not self.enabled:
+            self._log(f"lookup skipped (disabled) tool={tool_name}")
             return None
 
         cache_key = self._generate_cache_key(tool_name, query, **kwargs)
+        q_preview = (query or "").strip().replace("\n", " ")[:120]
+        self._log(f"lookup tool={tool_name} key={cache_key} q={q_preview!r}")
 
         if cache_key in self._cache:
             return self._cache[cache_key]
 
         return None
+
 
     def set(self, tool_name: str, query: str, result: str, **kwargs):
         """
@@ -132,6 +144,7 @@ class SearchCache:
             **kwargs: Additional search parameters
         """
         if not self.enabled:
+            self._log(f"store skipped (disabled) tool={tool_name}")
             return
 
         cache_key = self._generate_cache_key(tool_name, query, **kwargs)

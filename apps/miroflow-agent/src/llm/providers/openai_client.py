@@ -159,7 +159,7 @@ class OpenAIClient(BaseClient):
         )
 
         # Retry loop with dynamic max_tokens adjustment
-        max_retries = 10
+        max_retries = 100
         base_wait_time = 30
         current_max_tokens = self.max_tokens
 
@@ -301,6 +301,58 @@ class OpenAIClient(BaseClient):
                             "LLM | API Error",
                             f"Error (attempt {attempt + 1}/{max_retries}): {str(e)}, retrying...",
                         )
+                        # Debug: Print messages content when InvalidParameter error occurs
+                        if "InvalidParameter" in str(e) or "Invalid base64" in str(e):
+                            logger.error("=== Debug: Messages content when InvalidParameter error ===")
+                            for idx, msg in enumerate(messages_for_llm):
+                                role = msg.get("role", "unknown")
+                                content = msg.get("content", "")
+                                if isinstance(content, list):
+                                    logger.error(f"Message {idx} [{role}]: (multimodal content)")
+                                    for item_idx, item in enumerate(content):
+                                        item_type = item.get("type", "unknown")
+                                        if item_type == "image_url":
+                                            image_url = item.get("image_url", {})
+                                            if isinstance(image_url, dict):
+                                                url = image_url.get("url", "")
+                                            else:
+                                                url = str(image_url)
+                                            # Print first 200 chars of image_url to identify the problematic one
+                                            logger.error(f"  Item {item_idx} [image_url]: {url[:200]}...")
+                                            # Validate base64 data
+                                            if url.startswith("data:"):
+                                                try:
+                                                    # Extract base64 part
+                                                    if "," in url:
+                                                        header, b64_data = url.split(",", 1)
+                                                        logger.error(f"    -> Header: {header}, Base64 length: {len(b64_data)}")
+                                                        # Check for common issues
+                                                        if len(b64_data) < 100:
+                                                            logger.error(f"    -> WARNING: Base64 data too short!")
+                                                        # Try to decode to check validity
+                                                        import base64 as b64_module
+                                                        try:
+                                                            decoded = b64_module.b64decode(b64_data)
+                                                            logger.error(f"    -> Decoded size: {len(decoded)} bytes, First 20 bytes: {decoded[:20]}")
+                                                            # Check if it's HTML
+                                                            if decoded[:20].strip().lower().startswith((b'<!doctype', b'<html', b'<head', b'<?xml')):
+                                                                logger.error(f"    -> ERROR: Decoded content is HTML, not an image!")
+                                                        except Exception as decode_err:
+                                                            logger.error(f"    -> ERROR: Failed to decode base64: {decode_err}")
+                                                    else:
+                                                        logger.error(f"    -> WARNING: No comma found in data URL")
+                                                except Exception as parse_err:
+                                                    logger.error(f"    -> ERROR parsing data URL: {parse_err}")
+                                        elif item_type == "text":
+                                            text = item.get("text", "")
+                                            logger.error(f"  Item {item_idx} [text]: {text[:500]}...")
+                                        else:
+                                            logger.error(f"  Item {item_idx} [{item_type}]: {str(item)[:200]}...")
+                                else:
+                                    # Truncate long text content
+                                    content_preview = str(content)[:1000] if len(str(content)) > 1000 else str(content)
+                                    logger.error(f"Message {idx} [{role}]: {content_preview}")
+                            logger.error("=== End Debug ===")
                         await asyncio.sleep(base_wait_time)
                         continue
                     else:
@@ -519,7 +571,7 @@ class OpenAIClient(BaseClient):
             if isinstance(content, list):
                 for item in content:
                     if item.get("type") == "image_url":
-                        last_user_tokens += self._estimate_image_tokens(item.get("image_url"))
+                        last_user_tokens += self._estimate_image_tokens(item.get("image_url")['url'])
                         print(f"image estimated token: {last_user_tokens}")
                     elif item.get("type") == "text":
                         last_user_tokens += int(self._estimate_tokens(str(item.get("text"))) * buffer_factor)
@@ -538,20 +590,20 @@ class OpenAIClient(BaseClient):
             + self.max_tokens
             + 1000  # Add 1000 tokens as buffer
         )
-        print(f"{last_prompt_tokens=}")
-        print(f"{last_completion_tokens=}")
-        print(f"{last_user_tokens=}")
-        print(f"{summary_tokens=}")
-        print(f"{self.max_tokens=}")
-        print(f"{estimated_total=}")
-        print(f"{self.max_context_length=}")
+        # print(f"{last_prompt_tokens=}")
+        # print(f"{last_completion_tokens=}")
+        # print(f"{last_user_tokens=}")
+        # print(f"{summary_tokens=}")
+        # print(f"{self.max_tokens=}")
+        # print(f"{estimated_total=}")
+        # print(f"{self.max_context_length=}")
         
-        # Print last_user_tokens content
-        if message_history and message_history[-1]["role"] == "user":
-            last_user_content = message_history[-1]["content"]
-            print(f"\n=== last_user_tokens content (length: {len(str(last_user_content))} chars) ===")
-            print(f"{last_user_content}")
-            print("=" * 80)
+        # # Print last_user_tokens content
+        # if message_history and message_history[-1]["role"] == "user":
+        #     last_user_content = message_history[-1]["content"]
+        #     print(f"\n=== last_user_tokens content (length: {len(str(last_user_content))} chars) ===")
+        #     print(f"{last_user_content}")
+        #     print("=" * 80)
         
         # Print last_prompt_tokens content (reconstruct the prompt from last call)
         # Get system_prompt from task_log
@@ -580,12 +632,12 @@ class OpenAIClient(BaseClient):
                         content_str = str(content)
                     full_prompt_parts.append(f"[{role}]: {content_str}\n")
                 
-                full_prompt = "\n".join(full_prompt_parts)
-                print(f"\n=== last_prompt_tokens content (length: {len(full_prompt)} chars, estimated tokens: {last_prompt_tokens}) ===")
-                print(f"{full_prompt[-5000:]}")  # Print first 5000 chars to avoid too long output
-                if len(full_prompt) > 5000:
-                    print(f"\n... (truncated, total length: {len(full_prompt)} chars)")
-                print("=" * 80)
+                # full_prompt = "\n".join(full_prompt_parts)
+                # print(f"\n=== last_prompt_tokens content (length: {len(full_prompt)} chars, estimated tokens: {last_prompt_tokens}) ===")
+                # print(f"{full_prompt[-5000:]}")  # Print first 5000 chars to avoid too long output
+                # if len(full_prompt) > 5000:
+                #     print(f"\n... (truncated, total length: {len(full_prompt)} chars)")
+                # print("=" * 80)
 
         if estimated_total >= self.max_context_length:
             self.task_log.log_step(

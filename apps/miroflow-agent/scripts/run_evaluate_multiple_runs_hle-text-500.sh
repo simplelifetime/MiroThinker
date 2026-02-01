@@ -38,8 +38,8 @@ for i in $(seq 1 $NUM_RUNS); do
     (
         uv run python benchmarks/common_benchmark.py \
             benchmark=$BENCHMARK_NAME \
-            benchmark.data.metadata_file="standardized_data_original.jsonl" \
-            llm=qwen-3 \
+            benchmark.data.metadata_file="standardized_data_original_10.jsonl" \
+            llm=seed1.8 \
             llm.provider=$LLM_PROVIDER \
             llm.model_name=$LLM_MODEL \
             llm.base_url=$BASE_URL \

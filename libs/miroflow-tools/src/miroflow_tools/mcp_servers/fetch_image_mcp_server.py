@@ -18,6 +18,63 @@ import requests
 # Initialize FastMCP server
 mcp = FastMCP("fetch-image-mcp-server")
 
+# Image format magic bytes (file signatures)
+IMAGE_SIGNATURES = {
+    b'\x89PNG\r\n\x1a\n': 'image/png',
+    b'\xff\xd8\xff': 'image/jpeg',
+    b'GIF87a': 'image/gif',
+    b'GIF89a': 'image/gif',
+    b'RIFF': 'image/webp',  # WebP starts with RIFF, need to check further
+    b'BM': 'image/bmp',
+    b'\x00\x00\x01\x00': 'image/x-icon',  # ICO
+    b'\x00\x00\x02\x00': 'image/x-icon',  # CUR
+}
+
+
+def validate_image_content(image_bytes: bytes) -> tuple[bool, str, str]:
+    """
+    Validate that the downloaded content is actually an image by checking magic bytes.
+    
+    Args:
+        image_bytes: The raw bytes of the downloaded content
+        
+    Returns:
+        Tuple of (is_valid, detected_mime_type, error_message)
+        - If valid image: (True, mime_type, "")
+        - If invalid: (False, "", error_message)
+    """
+    if not image_bytes or len(image_bytes) < 8:
+        return False, "", "Downloaded content is empty or too small to be a valid image"
+    
+    # Check for HTML content (common when server returns error page)
+    # HTML typically starts with <!DOCTYPE, <html, or whitespace followed by these
+    content_start = image_bytes[:100].strip().lower()
+    if content_start.startswith(b'<!doctype') or content_start.startswith(b'<html') or content_start.startswith(b'<head') or content_start.startswith(b'<?xml'):
+        return False, "", "Downloaded content is HTML/XML, not an image. The URL may have returned an error page or redirect."
+    
+    # Check magic bytes for known image formats
+    for signature, mime_type in IMAGE_SIGNATURES.items():
+        if image_bytes.startswith(signature):
+            # Special case for WebP: need to verify "WEBP" at offset 8
+            if signature == b'RIFF' and len(image_bytes) >= 12:
+                if image_bytes[8:12] != b'WEBP':
+                    continue  # Not a WebP file, might be other RIFF format
+            return True, mime_type, ""
+    
+    # If no known signature matched, try to use PIL to validate
+    try:
+        from PIL import Image
+        from io import BytesIO
+        img = Image.open(BytesIO(image_bytes))
+        img.verify()  # Verify it's a valid image
+        mime_type = f"image/{img.format.lower()}" if img.format else "image/unknown"
+        return True, mime_type, ""
+    except ImportError:
+        # PIL not available, accept unknown format with warning
+        return True, "image/unknown", ""
+    except Exception as e:
+        return False, "", f"Downloaded content is not a valid image: {str(e)}"
+
 
 def get_mime_type_from_url(url: str) -> str:
     """
@@ -68,15 +125,29 @@ def download_image_from_url(image_url: str, timeout: int = 30) -> tuple[bytes, s
         response = requests.get(image_url, timeout=timeout, stream=True, headers=headers)
         response.raise_for_status()
 
-        # Get MIME type
-        mime_type = get_mime_type_from_url(image_url)
-
-        # Optionally, check Content-Type header
+        # Check Content-Type header first - reject if it's HTML/text
         content_type = response.headers.get('Content-Type', '')
-        if content_type.startswith('image/'):
-            mime_type = content_type
+        if content_type.startswith('text/html') or content_type.startswith('text/plain'):
+            return None, None, f"URL returned {content_type} instead of an image. The server may have returned an error page or redirect."
 
-        return response.content, mime_type, ""
+        # Get the content
+        image_bytes = response.content
+        
+        # Validate the content is actually an image (check magic bytes)
+        is_valid, detected_mime_type, validation_error = validate_image_content(image_bytes)
+        if not is_valid:
+            return None, None, validation_error
+        
+        # Determine final MIME type
+        # Priority: detected from content > Content-Type header > guessed from URL
+        if detected_mime_type and detected_mime_type != "image/unknown":
+            mime_type = detected_mime_type
+        elif content_type.startswith('image/'):
+            mime_type = content_type.split(';')[0]  # Remove charset if present
+        else:
+            mime_type = get_mime_type_from_url(image_url)
+
+        return image_bytes, mime_type, ""
 
     except requests.exceptions.Timeout:
         return None, None, f"Download timeout after {timeout} seconds"
