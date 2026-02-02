@@ -150,6 +150,27 @@ def format_image_for_context(
     return image_content, text_description
 
 
+def validate_image_content(image_bytes: bytes) -> Tuple[bool, str]:
+    """
+    Validate that the downloaded content is actually an image.
+    
+    Args:
+        image_bytes: The raw bytes of the downloaded content
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not image_bytes or len(image_bytes) < 8:
+        return False, "Downloaded content is empty or too small to be a valid image"
+    
+    # Check for HTML content (common when server returns error page)
+    content_start = image_bytes[:100].strip().lower()
+    if content_start.startswith((b'<!doctype', b'<html', b'<head', b'<?xml')):
+        return False, "Downloaded content is HTML/XML, not an image. The URL may have returned an error page or redirect."
+    
+    return True, ""
+
+
 def download_image_from_url(image_url: str, timeout: int = 30) -> Tuple[Optional[bytes], Optional[str]]:
     """
     Download image from URL and return bytes and error message.
@@ -172,14 +193,27 @@ def download_image_from_url(image_url: str, timeout: int = 30) -> Tuple[Optional
         if parsed_url.scheme not in ['http', 'https']:
             return None, f"Unsupported URL scheme: {parsed_url.scheme}. Only http and https are supported."
 
-        # Download image
-        response = requests.get(image_url, timeout=timeout, stream=True)
+        # Download image with User-Agent header to avoid 403 errors
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        response = requests.get(image_url, timeout=timeout, stream=True, headers=headers)
         response.raise_for_status()
+
+        # Check Content-Type header - reject if it's HTML/text
+        content_type = response.headers.get('Content-Type', '')
+        if content_type.startswith('text/html') or content_type.startswith('text/plain'):
+            return None, f"[ERROR]: URL returned {content_type} instead of an image. The server may have returned an error page or redirect."
 
         # Check file size
         file_size = len(response.content)
         if file_size > MAX_IMAGE_SIZE:
             return None, f"[ERROR]: Downloaded image size ({file_size / (1024 * 1024):.2f}MB) exceeds maximum allowed size (20MB)"
+
+        # Validate the content is actually an image
+        is_valid, validation_error = validate_image_content(response.content)
+        if not is_valid:
+            return None, f"[ERROR]: {validation_error}"
 
         return response.content, None
 

@@ -18,11 +18,19 @@ import asyncio
 import dataclasses
 import logging
 from typing import Any, Dict, List, Tuple, Union
+import os
 
 import tiktoken
-from openai import AsyncOpenAI, DefaultAsyncHttpxClient, DefaultHttpxClient, OpenAI
+from openai import (
+    AsyncAzureOpenAI,
+    AsyncOpenAI,
+    AzureOpenAI,
+    DefaultAsyncHttpxClient,
+    DefaultHttpxClient,
+    OpenAI,
+)
 
-from ...utils.prompt_utils import generate_mcp_system_prompt
+from ...utils.prompt_utils import generate_mcp_system_prompt, generate_openai_function_calling_system_prompt
 from ..base_client import BaseClient
 
 logger = logging.getLogger("miroflow_agent")
@@ -30,21 +38,51 @@ logger = logging.getLogger("miroflow_agent")
 
 @dataclasses.dataclass
 class OpenAIClient(BaseClient):
-    def _create_client(self) -> Union[AsyncOpenAI, OpenAI]:
+    def _create_client(self) -> Union[AsyncOpenAI, OpenAI, AsyncAzureOpenAI, AzureOpenAI]:
         """Create LLM client"""
         http_client_args = {"headers": {"x-upstream-session-id": self.task_id}}
+
+        openai_backend = (os.environ.get("OPENAI_BACKEND") or "").strip().lower()
+        use_azure = openai_backend == "azure"
+
+        if use_azure:
+            azure_endpoint = self.cfg.llm.get("azure_endpoint") or self.base_url
+            api_version = self.cfg.llm.get("api_version") or os.environ.get("OPENAI_API_VERSION")
+
+            if not azure_endpoint:
+                raise ValueError(
+                    "OPENAI_BACKEND=azure requires `llm.azure_endpoint` (or `llm.base_url`)."
+                )
+            if not api_version:
+                raise ValueError(
+                    "OPENAI_BACKEND=azure requires `llm.api_version` (or env OPENAI_API_VERSION)."
+                )
+
+            if self.async_client:
+                return AsyncAzureOpenAI(
+                    api_key=self.api_key,
+                    api_version=api_version,
+                    azure_endpoint=azure_endpoint,
+                    http_client=DefaultAsyncHttpxClient(**http_client_args),
+                )
+            return AzureOpenAI(
+                api_key=self.api_key,
+                api_version=api_version,
+                azure_endpoint=azure_endpoint,
+                http_client=DefaultHttpxClient(**http_client_args),
+            )
+
         if self.async_client:
             return AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
                 http_client=DefaultAsyncHttpxClient(**http_client_args),
             )
-        else:
-            return OpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                http_client=DefaultHttpxClient(**http_client_args),
-            )
+        return OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            http_client=DefaultHttpxClient(**http_client_args),
+        )
 
     def _update_token_usage(self, usage_data: Any) -> None:
         """Update cumulative token usage"""
@@ -121,9 +159,19 @@ class OpenAIClient(BaseClient):
         )
 
         # Retry loop with dynamic max_tokens adjustment
-        max_retries = 10
+        max_retries = 100
         base_wait_time = 30
         current_max_tokens = self.max_tokens
+
+        # Convert MCP tool definitions to OpenAI function calling format if enabled
+        openai_tools = None
+        if self.use_tool_calls and tools_definitions:
+            openai_tools = self.convert_tool_definition_to_openai_format(tools_definitions)
+            self.task_log.log_step(
+                "info",
+                "LLM | Function Calling",
+                f"Using OpenAI native function calling with {len(openai_tools)} tools",
+            )
 
         for attempt in range(max_retries):
             params = {
@@ -134,6 +182,12 @@ class OpenAIClient(BaseClient):
                 "top_p": self.top_p,
                 "extra_body": {},
             }
+            
+            # Add tools parameter for native function calling
+            if openai_tools:
+                params["tools"] = openai_tools
+                params["tool_choice"] = "auto"
+            
             # Check if the model is GPT-5, and adjust the parameter accordingly
             if "gpt-5" in self.model_name:
                 # Use 'max_completion_tokens' for GPT-5
@@ -263,6 +317,58 @@ class OpenAIClient(BaseClient):
                             "LLM | API Error",
                             f"Error (attempt {attempt + 1}/{max_retries}): {str(e)}, retrying...",
                         )
+                        # Debug: Print messages content when InvalidParameter error occurs
+                        if "InvalidParameter" in str(e) or "Invalid base64" in str(e):
+                            logger.error("=== Debug: Messages content when InvalidParameter error ===")
+                            for idx, msg in enumerate(messages_for_llm):
+                                role = msg.get("role", "unknown")
+                                content = msg.get("content", "")
+                                if isinstance(content, list):
+                                    logger.error(f"Message {idx} [{role}]: (multimodal content)")
+                                    for item_idx, item in enumerate(content):
+                                        item_type = item.get("type", "unknown")
+                                        if item_type == "image_url":
+                                            image_url = item.get("image_url", {})
+                                            if isinstance(image_url, dict):
+                                                url = image_url.get("url", "")
+                                            else:
+                                                url = str(image_url)
+                                            # Print first 200 chars of image_url to identify the problematic one
+                                            logger.error(f"  Item {item_idx} [image_url]: {url[:200]}...")
+                                            # Validate base64 data
+                                            if url.startswith("data:"):
+                                                try:
+                                                    # Extract base64 part
+                                                    if "," in url:
+                                                        header, b64_data = url.split(",", 1)
+                                                        logger.error(f"    -> Header: {header}, Base64 length: {len(b64_data)}")
+                                                        # Check for common issues
+                                                        if len(b64_data) < 100:
+                                                            logger.error(f"    -> WARNING: Base64 data too short!")
+                                                        # Try to decode to check validity
+                                                        import base64 as b64_module
+                                                        try:
+                                                            decoded = b64_module.b64decode(b64_data)
+                                                            logger.error(f"    -> Decoded size: {len(decoded)} bytes, First 20 bytes: {decoded[:20]}")
+                                                            # Check if it's HTML
+                                                            if decoded[:20].strip().lower().startswith((b'<!doctype', b'<html', b'<head', b'<?xml')):
+                                                                logger.error(f"    -> ERROR: Decoded content is HTML, not an image!")
+                                                        except Exception as decode_err:
+                                                            logger.error(f"    -> ERROR: Failed to decode base64: {decode_err}")
+                                                    else:
+                                                        logger.error(f"    -> WARNING: No comma found in data URL")
+                                                except Exception as parse_err:
+                                                    logger.error(f"    -> ERROR parsing data URL: {parse_err}")
+                                        elif item_type == "text":
+                                            text = item.get("text", "")
+                                            logger.error(f"  Item {item_idx} [text]: {text[:500]}...")
+                                        else:
+                                            logger.error(f"  Item {item_idx} [{item_type}]: {str(item)[:200]}...")
+                                else:
+                                    # Truncate long text content
+                                    content_preview = str(content)[:1000] if len(str(content)) > 1000 else str(content)
+                                    logger.error(f"Message {idx} [{role}]: {content_preview}")
+                            logger.error("=== End Debug ===")
                         await asyncio.sleep(base_wait_time)
                         continue
                     else:
@@ -287,16 +393,91 @@ class OpenAIClient(BaseClient):
             )
             return "", True, message_history  # Exit loop, return message_history
 
+        finish_reason = llm_response.choices[0].finish_reason
+        message = llm_response.choices[0].message
+        
+        # Extract reasoning_content if present (for Kimi/DeepSeek thinking models)
+        reasoning_content = getattr(message, "reasoning_content", None)
+        
         # Extract LLM response text
-        if llm_response.choices[0].finish_reason == "stop":
-            assistant_response_text = llm_response.choices[0].message.content or ""
+        if finish_reason == "stop":
+            assistant_response_text = message.content or ""
 
-            message_history.append(
-                {"role": "assistant", "content": assistant_response_text}
+            assistant_message = {"role": "assistant", "content": assistant_response_text}
+            # Preserve reasoning_content for multi-turn conversation context
+            if reasoning_content:
+                assistant_message["reasoning_content"] = reasoning_content
+            message_history.append(assistant_message)
+
+        elif finish_reason == "tool_calls":
+            # OpenAI native function calling - model wants to call tools
+            assistant_response_text = message.content or ""
+            tool_calls = message.tool_calls
+            
+            # Build assistant message with tool_calls for message history
+            # Try to use the original message object's dict representation for better compatibility
+            try:
+                # OpenAI SDK objects have model_dump() method
+                if hasattr(message, 'model_dump'):
+                    assistant_message = message.model_dump(exclude_unset=True)
+                elif hasattr(message, 'dict'):
+                    assistant_message = message.dict(exclude_unset=True)
+                else:
+                    # Fallback to manual construction
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": assistant_response_text,
+                    }
+                    if tool_calls:
+                        assistant_message["tool_calls"] = [
+                            {
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                }
+                            }
+                            for tc in tool_calls
+                        ]
+            except Exception as e:
+                logger.warning(f"Failed to dump message object: {e}, using manual construction")
+                assistant_message = {
+                    "role": "assistant",
+                    "content": assistant_response_text,
+                }
+                if tool_calls:
+                    assistant_message["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            }
+                        }
+                        for tc in tool_calls
+                    ]
+            
+            # Preserve reasoning_content for multi-turn conversation context
+            if reasoning_content:
+                assistant_message["reasoning_content"] = reasoning_content
+            
+            message_history.append(assistant_message)
+            
+            # Log tool_calls for debugging
+            if tool_calls:
+                for tc in tool_calls:
+                    logger.info(f"Tool call stored: id={tc.id}, name={tc.function.name}")
+            
+            self.task_log.log_step(
+                "info",
+                "LLM | Tool Calls",
+                f"Model requested {len(tool_calls) if tool_calls else 0} tool call(s)",
             )
 
-        elif llm_response.choices[0].finish_reason == "length":
-            assistant_response_text = llm_response.choices[0].message.content or ""
+        elif finish_reason == "length":
+            assistant_response_text = message.content or ""
             if assistant_response_text == "":
                 assistant_response_text = "LLM response is empty."
             elif "Context length exceeded" in assistant_response_text:
@@ -306,9 +487,10 @@ class OpenAIClient(BaseClient):
                     "LLM | Context Length",
                     "Detected context length exceeded, returning error status",
                 )
-                message_history.append(
-                    {"role": "assistant", "content": assistant_response_text}
-                )
+                assistant_message = {"role": "assistant", "content": assistant_response_text}
+                if reasoning_content:
+                    assistant_message["reasoning_content"] = reasoning_content
+                message_history.append(assistant_message)
                 return (
                     assistant_response_text,
                     True,
@@ -316,13 +498,14 @@ class OpenAIClient(BaseClient):
                 )  # Return True to indicate need to exit loop
 
             # Add assistant response to history
-            message_history.append(
-                {"role": "assistant", "content": assistant_response_text}
-            )
+            assistant_message = {"role": "assistant", "content": assistant_response_text}
+            if reasoning_content:
+                assistant_message["reasoning_content"] = reasoning_content
+            message_history.append(assistant_message)
 
         else:
             raise ValueError(
-                f"Unsupported finish reason: {llm_response.choices[0].finish_reason}"
+                f"Unsupported finish reason: {finish_reason}"
             )
 
         return assistant_response_text, False, message_history
@@ -330,9 +513,24 @@ class OpenAIClient(BaseClient):
     def extract_tool_calls_info(
         self, llm_response: Any, assistant_response_text: str
     ) -> List[Dict]:
-        """Extract tool call information from LLM response"""
+        """Extract tool call information from LLM response.
+        
+        Supports two modes:
+        1. Native OpenAI function calling: tool_calls are in llm_response.choices[0].message.tool_calls
+        2. MCP XML format: tool_calls are embedded in assistant_response_text as <use_mcp_tool> tags
+        """
         from ...utils.parsing_utils import parse_llm_response_for_tool_calls
-
+        
+        # Check if native function calling was used (tool_calls in response)
+        if (llm_response and 
+            llm_response.choices and 
+            hasattr(llm_response.choices[0].message, 'tool_calls') and
+            llm_response.choices[0].message.tool_calls):
+            # Native OpenAI function calling format
+            tool_calls = llm_response.choices[0].message.tool_calls
+            return parse_llm_response_for_tool_calls(tool_calls)
+        
+        # Fall back to MCP XML format parsing from text
         return parse_llm_response_for_tool_calls(assistant_response_text)
 
     def update_message_history(
@@ -342,12 +540,69 @@ class OpenAIClient(BaseClient):
         Update message history with tool calls data (llm client specific).
 
         Handles both text-only and multi-modal content formats.
+        Supports two modes:
+        1. OpenAI native function calling: uses 'tool' role with tool_call_id and name
+        2. MCP XML format: uses 'user' role with merged content
+        
+        Args:
+            message_history: List of message dictionaries
+            all_tool_results_content_with_id: List of tuples (call_id, tool_name, tool_result_content)
         """
+        # Check if we're using native function calling (check if any tool_call has an id)
+        has_tool_call_ids = any(
+            item[0] is not None for item in all_tool_results_content_with_id
+        )
+        
+        # Debug logging
+        logger.info(f"update_message_history: use_tool_calls={self.use_tool_calls}, "
+                    f"has_tool_call_ids={has_tool_call_ids}, "
+                    f"num_results={len(all_tool_results_content_with_id)}")
+        for i, item in enumerate(all_tool_results_content_with_id):
+            logger.info(f"  Result {i}: call_id={item[0]}, tool_name={item[1]}")
+        
+        if has_tool_call_ids and self.use_tool_calls:
+            # OpenAI native function calling format
+            # Each tool result needs its own message with 'tool' role
+            for item in all_tool_results_content_with_id:
+                tool_call_id = item[0]
+                tool_name = item[1]
+                tool_result_content = item[2]
+                
+                # Extract text content
+                if isinstance(tool_result_content, dict):
+                    if tool_result_content.get("type") == "text":
+                        content = tool_result_content.get("text", "")
+                    else:
+                        content = str(tool_result_content)
+                elif isinstance(tool_result_content, list):
+                    # Multi-modal format: extract text parts, note images
+                    text_parts = []
+                    for content_item in tool_result_content:
+                        if content_item.get("type") == "text":
+                            text_parts.append(content_item.get("text", ""))
+                        elif content_item.get("type") == "image_url":
+                            text_parts.append("[Image content included]")
+                    content = "\n".join(text_parts)
+                else:
+                    content = str(tool_result_content)
+                
+                # OpenAI function calling requires: role, tool_call_id, name, content
+                message_history.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "name": tool_name,
+                    "content": content,
+                })
+            
+            return message_history
+        
+        # MCP XML format: use 'user' role with merged content
         # Collect all content items
         content_items = []
 
         for item in all_tool_results_content_with_id:
-            tool_result_content = item[1]
+            # item is (call_id, tool_name, tool_result_content)
+            tool_result_content = item[2]
 
             # Handle both dict and list formats
             if isinstance(tool_result_content, dict):
@@ -390,7 +645,20 @@ class OpenAIClient(BaseClient):
         return message_history
 
     def generate_agent_system_prompt(self, date: Any, mcp_servers: List[Dict]) -> str:
-        return generate_mcp_system_prompt(date, mcp_servers)
+        """Generate system prompt based on tool calling mode.
+        
+        When use_tool_calls is True (native function calling), returns a simplified
+        system prompt without tool definitions (tools are passed via API parameter).
+        
+        When use_tool_calls is False (MCP XML format), returns the full MCP system
+        prompt with tool definitions embedded.
+        """
+        if self.use_tool_calls:
+            # Native function calling: tools are passed via API, not in system prompt
+            return generate_openai_function_calling_system_prompt(date)
+        else:
+            # MCP XML format: tools are embedded in system prompt
+            return generate_mcp_system_prompt(date, mcp_servers)
 
     def _estimate_tokens(self, text: str) -> int:
         """Use tiktoken to estimate the number of tokens in text"""
@@ -412,6 +680,51 @@ class OpenAIClient(BaseClient):
                 f"Error: {str(e)}",
             )
             return len(text) // 4
+    
+    def _estimate_image_tokens(self, image_url: str) -> int:
+        """
+        Args:
+            image_url: Image URL (can be data URI with base64 or regular URL)
+            
+        Returns:
+            Estimated token count for the image
+        """
+        try:
+            import base64
+            from PIL import Image
+            from io import BytesIO
+            
+            # Extract base64 data if it's a data URI
+            if image_url.startswith("data:image"):
+                # Format: data:image/jpeg;base64,<base64_data>
+                base64_data = image_url.split(",", 1)[1] if "," in image_url else ""
+            elif image_url.startswith("http://") or image_url.startswith("https://"):
+                print(f"URL image: {image_url}, use conservative estimate for URL images")
+                return 1024  # Conservative estimate for URL images
+            else:
+                # Assume it's already base64
+                base64_data = image_url
+            
+            # Decode base64 to get image
+            image_bytes = base64.b64decode(base64_data)
+            image = Image.open(BytesIO(image_bytes))
+            # Get original dimensions
+            width, height = image.size
+            
+            width_token = width // 28
+            height_token = height // 28
+            total_tokens = width_token * height_token
+            return total_tokens
+            
+        except Exception as e:
+            # If calculation fails, use conservative estimate
+            self.task_log.log_step(
+                "warning",
+                "LLM | Image Token Estimation",
+                f"Failed to calculate image tokens, using estimate: {str(e)}",
+            )
+            # Conservative estimate: assume medium-sized image
+            return 1024
 
     def ensure_summary_context(
         self, message_history: list, summary_prompt: str
@@ -433,7 +746,18 @@ class OpenAIClient(BaseClient):
         last_user_tokens = 0
         if message_history[-1]["role"] == "user":
             content = message_history[-1]["content"]
-            last_user_tokens = int(self._estimate_tokens(str(content)) * buffer_factor)
+            if isinstance(content, list):
+                for item in content:
+                    if item.get("type") == "image_url":
+                        last_user_tokens += self._estimate_image_tokens(item.get("image_url")['url'])
+                        print(f"image estimated token: {last_user_tokens}")
+                    elif item.get("type") == "text":
+                        last_user_tokens += int(self._estimate_tokens(str(item.get("text"))) * buffer_factor)
+                        print(f"text estimated token: {last_user_tokens}")
+                    else:
+                        logger.error(f"Unknown content type: {item.get('type')}")
+            else:
+                last_user_tokens = int(self._estimate_tokens(str(content)) * buffer_factor)
 
         # Calculate total token count: last prompt + completion + last user message + summary + reserved response space
         estimated_total = (
@@ -444,6 +768,54 @@ class OpenAIClient(BaseClient):
             + self.max_tokens
             + 1000  # Add 1000 tokens as buffer
         )
+        # print(f"{last_prompt_tokens=}")
+        # print(f"{last_completion_tokens=}")
+        # print(f"{last_user_tokens=}")
+        # print(f"{summary_tokens=}")
+        # print(f"{self.max_tokens=}")
+        # print(f"{estimated_total=}")
+        # print(f"{self.max_context_length=}")
+        
+        # # Print last_user_tokens content
+        # if message_history and message_history[-1]["role"] == "user":
+        #     last_user_content = message_history[-1]["content"]
+        #     print(f"\n=== last_user_tokens content (length: {len(str(last_user_content))} chars) ===")
+        #     print(f"{last_user_content}")
+        #     print("=" * 80)
+        
+        # Print last_prompt_tokens content (reconstruct the prompt from last call)
+        # Get system_prompt from task_log
+        if hasattr(self, 'task_log') and self.task_log:
+            main_agent_msg = getattr(self.task_log, 'main_agent_message_history', None)
+            system_prompt = ''
+            if isinstance(main_agent_msg, dict):
+                system_prompt = main_agent_msg.get('system_prompt', '')
+            
+            # Reconstruct the message history from last call (remove the last user message which is tool result)
+            last_call_message_history = message_history[:-1] if message_history and message_history[-1]["role"] == "user" else message_history
+            
+            # Build the full prompt that was sent in the last call
+            if system_prompt and last_call_message_history:
+                # Reconstruct messages as they were sent to LLM
+                full_prompt_parts = []
+                full_prompt_parts.append(f"System Prompt:\n{system_prompt}\n")
+                full_prompt_parts.append("\nMessage History:\n")
+                for msg in last_call_message_history:
+                    role = msg.get("role", "unknown")
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        # Handle multi-modal content
+                        content_str = "\n".join([str(item) for item in content])
+                    else:
+                        content_str = str(content)
+                    full_prompt_parts.append(f"[{role}]: {content_str}\n")
+                
+                # full_prompt = "\n".join(full_prompt_parts)
+                # print(f"\n=== last_prompt_tokens content (length: {len(full_prompt)} chars, estimated tokens: {last_prompt_tokens}) ===")
+                # print(f"{full_prompt[-5000:]}")  # Print first 5000 chars to avoid too long output
+                # if len(full_prompt) > 5000:
+                #     print(f"\n... (truncated, total length: {len(full_prompt)} chars)")
+                # print("=" * 80)
 
         if estimated_total >= self.max_context_length:
             self.task_log.log_step(

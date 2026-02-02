@@ -430,10 +430,12 @@ class Orchestrator:
                 )
                 break
 
-            if assistant_response_text:
-                text_response = extract_llm_response_text(assistant_response_text)
-                if text_response:
-                    await self.stream.tool_call("show_text", {"text": text_response})
+            # Note: When finish_reason is "tool_calls", content may be empty but tool_calls is valid
+            if assistant_response_text or tool_calls:
+                if assistant_response_text:
+                    text_response = extract_llm_response_text(assistant_response_text)
+                    if text_response:
+                        await self.stream.tool_call("show_text", {"text": text_response})
             else:
                 self.task_log.log_step(
                     "info",
@@ -612,7 +614,8 @@ class Orchestrator:
                 tool_result_for_llm = self.output_formatter.format_tool_result_for_user(
                     tool_result
                 )
-                all_tool_results_content_with_id.append((call_id, tool_result_for_llm))
+                # Include tool_name for OpenAI function calling format (requires 'name' field)
+                all_tool_results_content_with_id.append((call_id, tool_name, tool_result_for_llm))
 
             if should_rollback_turn:
                 continue
@@ -835,17 +838,19 @@ class Orchestrator:
             )
 
             # Process LLM response
-            if assistant_response_text:
-                text_response = extract_llm_response_text(assistant_response_text)
-                if text_response:
-                    await self.stream.tool_call("show_text", {"text": text_response})
+            # Note: When finish_reason is "tool_calls", content may be empty but tool_calls is valid
+            if assistant_response_text or tool_calls:
+                if assistant_response_text:
+                    text_response = extract_llm_response_text(assistant_response_text)
+                    if text_response:
+                        await self.stream.tool_call("show_text", {"text": text_response})
 
-                # Extract boxed content
-                boxed_content = self.output_formatter._extract_boxed_content(
-                    assistant_response_text
-                )
-                if boxed_content:
-                    self.intermediate_boxed_answers.append(boxed_content)
+                    # Extract boxed content
+                    boxed_content = self.output_formatter._extract_boxed_content(
+                        assistant_response_text
+                    )
+                    if boxed_content:
+                        self.intermediate_boxed_answers.append(boxed_content)
 
                 if should_break:
                     self.task_log.log_step(
@@ -1083,7 +1088,8 @@ class Orchestrator:
                 tool_result_for_llm = self.output_formatter.format_tool_result_for_user(
                     tool_result
                 )
-                all_tool_results_content_with_id.append((call_id, tool_result_for_llm))
+                # Include tool_name for OpenAI function calling format (requires 'name' field)
+                all_tool_results_content_with_id.append((call_id, tool_name, tool_result_for_llm))
 
             if should_rollback_turn:
                 continue
@@ -1120,6 +1126,14 @@ class Orchestrator:
             pass_length_check, message_history = self.llm_client.ensure_summary_context(
                 message_history, temp_summary_prompt
             )
+
+            # Update task_log with the potentially modified message_history
+            # (messages may have been removed if context limit was reached)
+            self.task_log.main_agent_message_history = {
+                "system_prompt": system_prompt,
+                "message_history": message_history,
+            }
+            self.task_log.save()
 
             if not pass_length_check:
                 turn_count = max_turns

@@ -270,7 +270,7 @@ class BaseClient(ABC):
         return response, message_history
 
     @staticmethod
-    async def convert_tool_definition_to_tool_call(tools_definitions):
+    def convert_tool_definition_to_openai_format(tools_definitions):
         """
         Convert MCP tool definitions to OpenAI function call format.
 
@@ -289,6 +289,9 @@ class BaseClient(ABC):
         for server in tools_definitions:
             if "tools" in server and len(server["tools"]) > 0:
                 for tool in server["tools"]:
+                    # Skip tools that failed to load (they only have 'error' key)
+                    if "error" in tool and "name" not in tool:
+                        continue
                     tool_def = dict(
                         type="function",
                         function=dict(

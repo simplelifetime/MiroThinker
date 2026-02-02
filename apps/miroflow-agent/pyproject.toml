@@ -46,7 +46,7 @@ dependencies = [
     "colorama>=0.4.6",
     "json-repair>=0.49.0",
     "tencentcloud-sdk-python>=3.0.1451",
-    "oss2>=2.18.0"
+    "oss2>=2.18.0",
 ]
 
 [build-system]

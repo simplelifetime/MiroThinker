@@ -395,7 +395,12 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig):
                         "-m",
                         "miroflow_tools.mcp_servers.image_processing_mcp_server",
                     ],
-                    env={},
+                    env={
+                        "OSS_ACCESS_KEY_ID": os.getenv("OSS_ACCESS_KEY_ID", ""),
+                        "OSS_ACCESS_KEY_SECRET": os.getenv("OSS_ACCESS_KEY_SECRET", ""),
+                        "OSS_BUCKET_NAME": os.getenv("OSS_BUCKET_NAME", ""),
+                        "OSS_ENDPOINT": os.getenv("OSS_ENDPOINT", ""),
+                    },
                 ),
             }
         )
@@ -413,7 +418,12 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig):
                         "-m",
                         "miroflow_tools.mcp_servers.fetch_image_mcp_server",
                     ],
-                    env={},
+                    env={
+                        "OSS_ACCESS_KEY_ID": os.getenv("OSS_ACCESS_KEY_ID", ""),
+                        "OSS_ACCESS_KEY_SECRET": os.getenv("OSS_ACCESS_KEY_SECRET", ""),
+                        "OSS_BUCKET_NAME": os.getenv("OSS_BUCKET_NAME", ""),
+                        "OSS_ENDPOINT": os.getenv("OSS_ENDPOINT", ""),
+                    },
                 ),
             }
         )

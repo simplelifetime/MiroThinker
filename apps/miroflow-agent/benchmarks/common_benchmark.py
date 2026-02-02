@@ -79,6 +79,9 @@ def _task_worker(task_dict, cfg_dict, evaluator_kwargs):
         file_name_field=evaluator_kwargs.get("file_name_field"),
     )
 
+    # Set run_dir for log directory resolution
+    evaluator.run_dir = evaluator_kwargs.get("run_dir")
+
     # Run task in new event loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -186,7 +189,17 @@ class BenchmarkEvaluator(ABC):
 
     def get_log_dir(self) -> Path:
         """Get the log directory for the current benchmark and model."""
-        return Path(hydra.core.hydra_config.HydraConfig.get().run.dir)
+        # 优先使用传入的 run_dir（如果存在）
+        if hasattr(self, 'run_dir') and self.run_dir:
+            return Path(self.run_dir)
+
+        try:
+            return Path(hydra.core.hydra_config.HydraConfig.get().run.dir)
+        except Exception:
+            # 备用方案：使用配置中的目录或当前工作目录
+            fallback_dir = Path.cwd() / "logs" / self.benchmark_name
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            return fallback_dir
 
     async def run_single_task(self, task: BenchmarkTask) -> BenchmarkResult:
         """
@@ -548,6 +561,8 @@ class BenchmarkEvaluator(ABC):
                     break
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             result.error_message = str(e)
             result.status = "failed"
             print(f"Error processing task {task.task_id}: {e}")
@@ -612,6 +627,7 @@ class BenchmarkEvaluator(ABC):
         evaluator_kwargs = {
             "data_dir": str(self.data_dir),
             "benchmark_name": self.benchmark_name,
+            "run_dir": str(self.get_log_dir()),
         }
         # Add GenericEvaluator specific kwargs if available
         if hasattr(self, "metadata_file"):

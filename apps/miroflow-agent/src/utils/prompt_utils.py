@@ -201,6 +201,34 @@ You accomplish a given task iteratively, breaking it down into clear steps and w
     return template
 
 
+def generate_openai_function_calling_system_prompt(date):
+    """
+    Generate system prompt for OpenAI native function calling mode.
+
+    This prompt is used when tools are passed via the `tools` parameter in the API call
+    instead of being embedded in the system prompt. The tool definitions are handled
+    by OpenAI's function calling mechanism.
+
+    Args:
+        date: Current date object for timestamp inclusion
+
+    Returns:
+        System prompt string without tool definitions (tools are passed separately)
+    """
+    formatted_date = date.strftime("%Y-%m-%d")
+
+    template = f"""In this environment you have access to a set of tools you can use to answer the user's question.
+
+You only have access to the tools provided. You can only use one tool per message, and will receive the result of that tool in the user's next response. You use tools step-by-step to accomplish a given task, with each tool-use informed by the result of the previous tool-use. Today is: {formatted_date}
+
+# General Objective
+
+You accomplish a given task iteratively, breaking it down into clear steps and working through them methodically.
+
+"""
+    return template
+
+
 def generate_agent_specific_system_prompt(agent_type=""):
     """
     Generate agent-specific objective prompts based on agent type.
