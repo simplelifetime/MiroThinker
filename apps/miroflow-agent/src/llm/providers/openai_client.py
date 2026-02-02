@@ -30,7 +30,7 @@ from openai import (
     OpenAI,
 )
 
-from ...utils.prompt_utils import generate_mcp_system_prompt
+from ...utils.prompt_utils import generate_mcp_system_prompt, generate_openai_function_calling_system_prompt
 from ..base_client import BaseClient
 
 logger = logging.getLogger("miroflow_agent")
@@ -163,6 +163,16 @@ class OpenAIClient(BaseClient):
         base_wait_time = 30
         current_max_tokens = self.max_tokens
 
+        # Convert MCP tool definitions to OpenAI function calling format if enabled
+        openai_tools = None
+        if self.use_tool_calls and tools_definitions:
+            openai_tools = self.convert_tool_definition_to_openai_format(tools_definitions)
+            self.task_log.log_step(
+                "info",
+                "LLM | Function Calling",
+                f"Using OpenAI native function calling with {len(openai_tools)} tools",
+            )
+
         for attempt in range(max_retries):
             params = {
                 "model": self.model_name,
@@ -172,6 +182,12 @@ class OpenAIClient(BaseClient):
                 "top_p": self.top_p,
                 "extra_body": {},
             }
+            
+            # Add tools parameter for native function calling
+            if openai_tools:
+                params["tools"] = openai_tools
+                params["tool_choice"] = "auto"
+            
             # Check if the model is GPT-5, and adjust the parameter accordingly
             if "gpt-5" in self.model_name:
                 # Use 'max_completion_tokens' for GPT-5
@@ -377,16 +393,91 @@ class OpenAIClient(BaseClient):
             )
             return "", True, message_history  # Exit loop, return message_history
 
+        finish_reason = llm_response.choices[0].finish_reason
+        message = llm_response.choices[0].message
+        
+        # Extract reasoning_content if present (for Kimi/DeepSeek thinking models)
+        reasoning_content = getattr(message, "reasoning_content", None)
+        
         # Extract LLM response text
-        if llm_response.choices[0].finish_reason == "stop":
-            assistant_response_text = llm_response.choices[0].message.content or ""
+        if finish_reason == "stop":
+            assistant_response_text = message.content or ""
 
-            message_history.append(
-                {"role": "assistant", "content": assistant_response_text}
+            assistant_message = {"role": "assistant", "content": assistant_response_text}
+            # Preserve reasoning_content for multi-turn conversation context
+            if reasoning_content:
+                assistant_message["reasoning_content"] = reasoning_content
+            message_history.append(assistant_message)
+
+        elif finish_reason == "tool_calls":
+            # OpenAI native function calling - model wants to call tools
+            assistant_response_text = message.content or ""
+            tool_calls = message.tool_calls
+            
+            # Build assistant message with tool_calls for message history
+            # Try to use the original message object's dict representation for better compatibility
+            try:
+                # OpenAI SDK objects have model_dump() method
+                if hasattr(message, 'model_dump'):
+                    assistant_message = message.model_dump(exclude_unset=True)
+                elif hasattr(message, 'dict'):
+                    assistant_message = message.dict(exclude_unset=True)
+                else:
+                    # Fallback to manual construction
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": assistant_response_text,
+                    }
+                    if tool_calls:
+                        assistant_message["tool_calls"] = [
+                            {
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                }
+                            }
+                            for tc in tool_calls
+                        ]
+            except Exception as e:
+                logger.warning(f"Failed to dump message object: {e}, using manual construction")
+                assistant_message = {
+                    "role": "assistant",
+                    "content": assistant_response_text,
+                }
+                if tool_calls:
+                    assistant_message["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            }
+                        }
+                        for tc in tool_calls
+                    ]
+            
+            # Preserve reasoning_content for multi-turn conversation context
+            if reasoning_content:
+                assistant_message["reasoning_content"] = reasoning_content
+            
+            message_history.append(assistant_message)
+            
+            # Log tool_calls for debugging
+            if tool_calls:
+                for tc in tool_calls:
+                    logger.info(f"Tool call stored: id={tc.id}, name={tc.function.name}")
+            
+            self.task_log.log_step(
+                "info",
+                "LLM | Tool Calls",
+                f"Model requested {len(tool_calls) if tool_calls else 0} tool call(s)",
             )
 
-        elif llm_response.choices[0].finish_reason == "length":
-            assistant_response_text = llm_response.choices[0].message.content or ""
+        elif finish_reason == "length":
+            assistant_response_text = message.content or ""
             if assistant_response_text == "":
                 assistant_response_text = "LLM response is empty."
             elif "Context length exceeded" in assistant_response_text:
@@ -396,9 +487,10 @@ class OpenAIClient(BaseClient):
                     "LLM | Context Length",
                     "Detected context length exceeded, returning error status",
                 )
-                message_history.append(
-                    {"role": "assistant", "content": assistant_response_text}
-                )
+                assistant_message = {"role": "assistant", "content": assistant_response_text}
+                if reasoning_content:
+                    assistant_message["reasoning_content"] = reasoning_content
+                message_history.append(assistant_message)
                 return (
                     assistant_response_text,
                     True,
@@ -406,13 +498,14 @@ class OpenAIClient(BaseClient):
                 )  # Return True to indicate need to exit loop
 
             # Add assistant response to history
-            message_history.append(
-                {"role": "assistant", "content": assistant_response_text}
-            )
+            assistant_message = {"role": "assistant", "content": assistant_response_text}
+            if reasoning_content:
+                assistant_message["reasoning_content"] = reasoning_content
+            message_history.append(assistant_message)
 
         else:
             raise ValueError(
-                f"Unsupported finish reason: {llm_response.choices[0].finish_reason}"
+                f"Unsupported finish reason: {finish_reason}"
             )
 
         return assistant_response_text, False, message_history
@@ -420,9 +513,24 @@ class OpenAIClient(BaseClient):
     def extract_tool_calls_info(
         self, llm_response: Any, assistant_response_text: str
     ) -> List[Dict]:
-        """Extract tool call information from LLM response"""
+        """Extract tool call information from LLM response.
+        
+        Supports two modes:
+        1. Native OpenAI function calling: tool_calls are in llm_response.choices[0].message.tool_calls
+        2. MCP XML format: tool_calls are embedded in assistant_response_text as <use_mcp_tool> tags
+        """
         from ...utils.parsing_utils import parse_llm_response_for_tool_calls
-
+        
+        # Check if native function calling was used (tool_calls in response)
+        if (llm_response and 
+            llm_response.choices and 
+            hasattr(llm_response.choices[0].message, 'tool_calls') and
+            llm_response.choices[0].message.tool_calls):
+            # Native OpenAI function calling format
+            tool_calls = llm_response.choices[0].message.tool_calls
+            return parse_llm_response_for_tool_calls(tool_calls)
+        
+        # Fall back to MCP XML format parsing from text
         return parse_llm_response_for_tool_calls(assistant_response_text)
 
     def update_message_history(
@@ -432,12 +540,69 @@ class OpenAIClient(BaseClient):
         Update message history with tool calls data (llm client specific).
 
         Handles both text-only and multi-modal content formats.
+        Supports two modes:
+        1. OpenAI native function calling: uses 'tool' role with tool_call_id and name
+        2. MCP XML format: uses 'user' role with merged content
+        
+        Args:
+            message_history: List of message dictionaries
+            all_tool_results_content_with_id: List of tuples (call_id, tool_name, tool_result_content)
         """
+        # Check if we're using native function calling (check if any tool_call has an id)
+        has_tool_call_ids = any(
+            item[0] is not None for item in all_tool_results_content_with_id
+        )
+        
+        # Debug logging
+        logger.info(f"update_message_history: use_tool_calls={self.use_tool_calls}, "
+                    f"has_tool_call_ids={has_tool_call_ids}, "
+                    f"num_results={len(all_tool_results_content_with_id)}")
+        for i, item in enumerate(all_tool_results_content_with_id):
+            logger.info(f"  Result {i}: call_id={item[0]}, tool_name={item[1]}")
+        
+        if has_tool_call_ids and self.use_tool_calls:
+            # OpenAI native function calling format
+            # Each tool result needs its own message with 'tool' role
+            for item in all_tool_results_content_with_id:
+                tool_call_id = item[0]
+                tool_name = item[1]
+                tool_result_content = item[2]
+                
+                # Extract text content
+                if isinstance(tool_result_content, dict):
+                    if tool_result_content.get("type") == "text":
+                        content = tool_result_content.get("text", "")
+                    else:
+                        content = str(tool_result_content)
+                elif isinstance(tool_result_content, list):
+                    # Multi-modal format: extract text parts, note images
+                    text_parts = []
+                    for content_item in tool_result_content:
+                        if content_item.get("type") == "text":
+                            text_parts.append(content_item.get("text", ""))
+                        elif content_item.get("type") == "image_url":
+                            text_parts.append("[Image content included]")
+                    content = "\n".join(text_parts)
+                else:
+                    content = str(tool_result_content)
+                
+                # OpenAI function calling requires: role, tool_call_id, name, content
+                message_history.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "name": tool_name,
+                    "content": content,
+                })
+            
+            return message_history
+        
+        # MCP XML format: use 'user' role with merged content
         # Collect all content items
         content_items = []
 
         for item in all_tool_results_content_with_id:
-            tool_result_content = item[1]
+            # item is (call_id, tool_name, tool_result_content)
+            tool_result_content = item[2]
 
             # Handle both dict and list formats
             if isinstance(tool_result_content, dict):
@@ -480,7 +645,20 @@ class OpenAIClient(BaseClient):
         return message_history
 
     def generate_agent_system_prompt(self, date: Any, mcp_servers: List[Dict]) -> str:
-        return generate_mcp_system_prompt(date, mcp_servers)
+        """Generate system prompt based on tool calling mode.
+        
+        When use_tool_calls is True (native function calling), returns a simplified
+        system prompt without tool definitions (tools are passed via API parameter).
+        
+        When use_tool_calls is False (MCP XML format), returns the full MCP system
+        prompt with tool definitions embedded.
+        """
+        if self.use_tool_calls:
+            # Native function calling: tools are passed via API, not in system prompt
+            return generate_openai_function_calling_system_prompt(date)
+        else:
+            # MCP XML format: tools are embedded in system prompt
+            return generate_mcp_system_prompt(date, mcp_servers)
 
     def _estimate_tokens(self, text: str) -> int:
         """Use tiktoken to estimate the number of tokens in text"""

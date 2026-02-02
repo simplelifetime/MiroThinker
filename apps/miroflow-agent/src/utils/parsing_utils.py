@@ -261,6 +261,14 @@ def parse_llm_response_for_tool_calls(
                 server_name = "unknown"
                 tool_name = name
             arguments_str = tool_call.function.arguments
+            
+            # Safely get tool_call id (some providers may have different attribute names)
+            tool_call_id = getattr(tool_call, 'id', None)
+            if tool_call_id is None:
+                # Try alternative attribute names
+                tool_call_id = getattr(tool_call, 'call_id', None)
+            
+            logger.info(f"Parsed tool_call: name={name}, id={tool_call_id}")
 
             # Parse JSON string to dictionary
             try:
@@ -298,7 +306,7 @@ def parse_llm_response_for_tool_calls(
                     server_name=server_name,
                     tool_name=tool_name,
                     arguments=arguments,
-                    id=tool_call.id,
+                    id=tool_call_id,
                 )
             )
         return tool_calls
