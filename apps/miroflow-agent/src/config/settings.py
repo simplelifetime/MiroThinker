@@ -66,7 +66,7 @@ SUMMARY_LLM_MODEL_NAME = os.environ.get("SUMMARY_LLM_MODEL_NAME")
 
 
 # MCP server configuration generation function
-def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig):
+def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id: str = None):
     """
     Create MCP server configurations based on agent configuration.
 
@@ -77,6 +77,7 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig):
     Args:
         cfg: Global Hydra configuration object
         agent_cfg: Agent-specific configuration containing 'tools' and 'tool_blacklist'
+        task_id: Optional task identifier to pass to MCP servers for task-specific caching
 
     Returns:
         Tuple of (configs, blacklist) where:
@@ -106,6 +107,9 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig):
             google_search_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
         if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
             google_search_env["MIROFLOW_SEARCH_CACHE_PATH"] = os.environ["MIROFLOW_SEARCH_CACHE_PATH"]
+        # Pass task_id for task-specific caching
+        if task_id:
+            google_search_env["MIROFLOW_TASK_ID"] = str(task_id)
 
         configs.append(
             {

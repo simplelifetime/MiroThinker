@@ -55,6 +55,13 @@ def _task_worker(task_dict, cfg_dict, evaluator_kwargs):
     task_cache = get_search_cache(task_id=task_id)
     print(f"[Worker] Initialized task-specific cache for task: {task_id}")
 
+    # NOTE: We DON'T save the task_cache here because:
+    # 1. Search operations happen in MCP subprocesses (serper_mcp_server)
+    # 2. Each subprocess saves its own cache incrementally using cache.save_to_file(force=True)
+    # 3. Our task_cache instance in worker process is empty (searches happen in subprocesses)
+    # 4. Saving here would overwrite the data written by subprocesses!
+    print(f"[Worker] Task cache will be managed by MCP subprocesses")
+
     # Reconstruct config in this process
     cfg = OmegaConf.create(cfg_dict)
 
@@ -77,6 +84,7 @@ def _task_worker(task_dict, cfg_dict, evaluator_kwargs):
         question_field=evaluator_kwargs.get("question_field", "task_question"),
         ground_truth_field=evaluator_kwargs.get("ground_truth_field", "ground_truth"),
         file_name_field=evaluator_kwargs.get("file_name_field"),
+        task_id=task_id,  # Pass task_id for MCP server environment
     )
 
     # Set run_dir for log directory resolution
@@ -100,12 +108,9 @@ def _task_worker(task_dict, cfg_dict, evaluator_kwargs):
     finally:
         loop.close()
 
-        # Save task-specific search cache after task completes
-        try:
-            task_cache.save_to_file()
-            print(f"[Worker] Saved task-specific cache for task: {task_id}")
-        except Exception as e:
-            print(f"Warning: Failed to save search cache for task {task_id}: {e}")
+        # DON'T save task_cache here - MCP subprocesses have already saved incrementally
+        # The task cache file should already exist with data from all subprocess calls
+        print(f"[Worker] Task {task_id} completed, cache managed by MCP subprocesses")
 
         # Clean up task cache instance to free memory
         try:
@@ -152,7 +157,7 @@ class BenchmarkResult:
 class BenchmarkEvaluator(ABC):
     """Abstract base class for benchmark evaluators"""
 
-    def __init__(self, data_dir: str, benchmark_name: str, cfg: DictConfig):
+    def __init__(self, data_dir: str, benchmark_name: str, cfg: DictConfig, task_id: str = None):
         """
         Initialize benchmark evaluator
 
@@ -160,6 +165,7 @@ class BenchmarkEvaluator(ABC):
             data_dir: Path to benchmark data directory
             benchmark_name: Name of the benchmark
             cfg: The Hydra configuration object
+            task_id: Optional task identifier for task-specific caching
         """
         self.data_dir = Path(data_dir)
         self.benchmark_name = benchmark_name
@@ -176,13 +182,13 @@ class BenchmarkEvaluator(ABC):
         self.llm_provider = cfg.llm.provider
         self.llm_model = cfg.llm.model_name
 
-        # Initialize pipeline components
+        # Initialize pipeline components with task_id for MCP servers
         print("Initializing pipeline components...")
         (
             self.main_agent_tool_manager,
             self.sub_agent_tool_managers,
             self.output_formatter,
-        ) = create_pipeline_components(cfg)
+        ) = create_pipeline_components(cfg, task_id=task_id)
         print(
             f"Pipeline components initialized successfully! Using pass@{self.pass_at_k}"
         )
@@ -869,6 +875,7 @@ class GenericEvaluator(BenchmarkEvaluator):
         question_field: str = "task_question",
         ground_truth_field: str = "ground_truth",
         file_name_field: Optional[str] = "file_name_field",
+        task_id: str = None,
     ):
         """
         Initialize generic evaluator
@@ -882,9 +889,9 @@ class GenericEvaluator(BenchmarkEvaluator):
             question_field: Field name for task question in the data
             ground_truth_field: Field name for ground truth answer in the data
             file_name_field: Field name for file name in the data (optional)
-            pass_at_k: Pass@K value for evaluation (default: 1)
+            task_id: Optional task identifier for task-specific caching
         """
-        super().__init__(data_dir=data_dir, benchmark_name=benchmark_name, cfg=cfg)
+        super().__init__(data_dir=data_dir, benchmark_name=benchmark_name, cfg=cfg, task_id=task_id)
         self.metadata_file = self.data_dir / metadata_file
         self.task_id_field = task_id_field
         self.question_field = question_field
@@ -1063,11 +1070,28 @@ class CommonBenchmark:
         # Save search cache (for non-multiprocessing runs)
         # Note: For multiprocessing runs, cache is saved in worker processes and merged in run_parallel_inference
         try:
-            from miroflow_tools.mcp_servers.utils.search_cache import get_search_cache
+            from miroflow_tools.mcp_servers.utils.search_cache import get_search_cache, get_current_task_id
             cache = get_search_cache()
             if cache._memory_cache:  # Only save if cache was used
-                cache.save_to_file()
-                print(f"Saved search cache with {len(cache._memory_cache)} entries")
+                # Check if we're in a worker process (task_id set) or main process (no task_id)
+                # In multiprocessing mode, main process doesn't need to save since merge already happened
+                current_task_id = get_current_task_id()
+                if current_task_id is None:
+                    # We're in main process - only save if no merge happened (single-process mode)
+                    # In multiprocessing mode, merge already saved to global cache
+                    from pathlib import Path
+                    cache_dir = Path.home() / "MiroThinker" / ".miroflow_tools" / "cache"
+                    task_cache_files = list(cache_dir.glob("search_cache_task*.json"))
+                    if not task_cache_files:
+                        # No task cache files found - this is single-process mode, save global cache
+                        cache.save_to_file()
+                        print(f"Saved search cache with {len(cache._memory_cache)} entries")
+                    else:
+                        # Task cache files exist - multiprocessing mode, cache already merged
+                        print(f"Search cache already merged in multiprocessing mode ({len(cache._memory_cache)} entries)")
+                else:
+                    # We're in worker process - cache is managed by MCP subprocesses, skip save
+                    print(f"Skipping cache save in worker process (task_id={current_task_id}, cache managed by MCP subprocesses)")
         except Exception as e:
             print(f"Warning: Failed to save search cache: {e}")
 

@@ -13,11 +13,14 @@ Design:
 
 import hashlib
 import json
+import logging
 import os
 import threading
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 # Context variable to store the current task_id
 # This allows task-specific cache to be used throughout the call stack
@@ -92,6 +95,15 @@ class SearchCache:
         self._memory_cache = {}
         self._load_cache()
 
+        # Load task-specific cache file if it exists (for incremental caching across subprocesses)
+        if task_id and self.task_cache_file.exists():
+            self._load_task_cache()
+
+        # Immediately create task-specific cache file if it doesn't exist
+        # This is crucial for proper cache tracking and merging
+        if task_id and not self.task_cache_file.exists():
+            self._initialize_task_cache_file()
+
     def _load_cache(self):
         """Load global cache file into memory."""
         if not self.enabled:
@@ -106,8 +118,42 @@ class SearchCache:
                 print(f"[SEARCH_CACHE] Warning: Failed to load global cache: {e}")
                 self._memory_cache = {}
         else:
-            self._memory_cache = {}
-            print("[SEARCH_CACHE] No existing global cache found, starting with empty cache")
+            logger.info(f"[SEARCH_CACHE] No existing global cache found, starting with empty cache")
+    
+    def _load_task_cache(self):
+        """Load task-specific cache file into memory, merging with existing global cache."""
+        if not self.enabled or not self.task_cache_file or not self.task_cache_file.exists():
+            return
+
+        try:
+            with open(self.task_cache_file, 'r', encoding='utf-8') as f:
+                task_cache_data = json.load(f)
+                if task_cache_data:
+                    # Merge task cache into memory cache
+                    self._memory_cache.update(task_cache_data)
+                    print(f"[SEARCH_CACHE] Loaded {len(task_cache_data)} entries from existing task cache {self.task_cache_file.name}")
+        except Exception as e:
+            logger.warning(f"[SEARCH_CACHE] Failed to load task cache from {self.task_cache_file}: {e}")
+
+    def _initialize_task_cache_file(self):
+        """
+        Initialize task-specific cache file immediately upon cache creation.
+        Creates an empty cache file to ensure the task is tracked even if no searches occur.
+        """
+        if not self.enabled or not self.task_cache_file:
+            return
+
+        try:
+            # Create parent directory if it doesn't exist
+            self.task_cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Create empty cache file if it doesn't exist yet
+            if not self.task_cache_file.exists():
+                with open(self.task_cache_file, 'w', encoding='utf-8') as f:
+                    json.dump({}, f, ensure_ascii=False, indent=2)
+                logger.info(f"[SEARCH_CACHE] Initialized task cache file: {self.task_cache_file.name}")
+        except Exception as e:
+            print(f"[SEARCH_CACHE] Warning: Failed to initialize task cache file: {e}")
 
     def _generate_cache_key(
         self, tool_name: str, query: str, **kwargs
@@ -203,31 +249,59 @@ class SearchCache:
                     "accessed_at": current_time
                 }
         except Exception as e:
-            print(f"[SEARCH_CACHE] Warning: Failed to cache entry: {e}")
+            logger.warning(f"[SEARCH_CACHE] Failed to cache entry: {e}")
 
-    def save_to_file(self):
+    def save_to_file(self, force: bool = False):
         """
-        Save current memory cache to task-specific JSON file.
+        Save current memory cache to task-specific JSON file using atomic write.
         This should be called when the task completes.
+
+        Args:
+            force: If True, save even if _saved flag is True (useful for incremental saves)
+
+        NOTE: Always creates the cache file, even if it's empty. This is important
+        for tracking which tasks have been completed and ensuring proper cache merging.
         """
-        if not self.enabled or not self._memory_cache:
+        if not self.enabled:
             return
 
-        # Avoid duplicate saves
-        if self._saved:
+        # Avoid duplicate saves unless force=True
+        if self._saved and not force:
             return
 
         try:
             # Create parent directory if it doesn't exist
             self.task_cache_file.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(self.task_cache_file, 'w', encoding='utf-8') as f:
-                json.dump(self._memory_cache, f, ensure_ascii=False, indent=2)
+            # Use atomic write: write to temp file, then rename
+            # This prevents corruption if the process is killed during write
+            temp_file = self.task_cache_file.with_suffix('.tmp')
 
-            self._saved = True
-            print(f"[SEARCH_CACHE] Saved {len(self._memory_cache)} entries to {self.task_cache_file.name}")
+            # Save cache even if empty - this is important for tracking task completion
+            cache_data = self._memory_cache if self._memory_cache else {}
+
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+
+            # Atomic rename (POSIX guarantee)
+            import os
+            os.replace(temp_file, self.task_cache_file)
+
+            if not force:
+                self._saved = True
+            entry_count = len(cache_data)
+            if entry_count > 0:
+                logger.info(f"[SEARCH_CACHE] Saved {entry_count} entries to {self.task_cache_file.name}")
+            else:
+                logger.info(f"[SEARCH_CACHE] Saved empty cache to {self.task_cache_file.name}")
         except Exception as e:
-            print(f"[SEARCH_CACHE] Warning: Failed to save cache to {self.task_cache_file}: {e}")
+            logger.warning(f"[SEARCH_CACHE] Failed to save cache to {self.task_cache_file}: {e}")
+            # Clean up temp file if it exists
+            try:
+                if temp_file.exists():
+                    temp_file.unlink()
+            except Exception:
+                pass
 
     def clear(self):
         """Clear all cached results from memory."""
@@ -357,8 +431,19 @@ class SearchCache:
         if global_cache_file.exists():
             try:
                 with open(global_cache_file, 'r', encoding='utf-8') as f:
-                    merged_cache = json.load(f)
-                    print(f"[SEARCH_CACHE] Loaded {len(merged_cache)} entries from existing global cache")
+                    loaded_cache = json.load(f)
+                    # Validate and filter cache entries - only keep dict entries
+                    valid_count = 0
+                    for cache_key, entry in loaded_cache.items():
+                        if isinstance(entry, dict):
+                            merged_cache[cache_key] = entry
+                            valid_count += 1
+                        else:
+                            logger.warning(f"[SEARCH_CACHE] Skipping invalid cache entry '{cache_key}': expected dict, got {type(entry).__name__}")
+                    print(f"[SEARCH_CACHE] Loaded {valid_count} valid entries from existing global cache")
+                    if valid_count < len(loaded_cache):
+                        invalid_count = len(loaded_cache) - valid_count
+                        logger.warning(f"[SEARCH_CACHE] Skipped {invalid_count} invalid entries from global cache")
             except Exception as e:
                 print(f"[SEARCH_CACHE] Warning: Failed to load global cache: {e}")
                 merged_cache = {}
@@ -375,6 +460,11 @@ class SearchCache:
                 print(f"[SEARCH_CACHE] Merging {len(file_cache)} entries from {cache_file.name}")
 
                 for cache_key, entry in file_cache.items():
+                    # Skip invalid entries (not dicts)
+                    if not isinstance(entry, dict):
+                        logger.warning(f"[SEARCH_CACHE] Skipping invalid entry '{cache_key}' in {cache_file.name}: expected dict, got {type(entry).__name__}")
+                        continue
+
                     if cache_key not in merged_cache:
                         # New entry
                         merged_cache[cache_key] = entry

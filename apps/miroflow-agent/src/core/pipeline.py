@@ -175,19 +175,20 @@ async def execute_task_pipeline(
         task_log.save()
 
 
-def create_pipeline_components(cfg: DictConfig):
+def create_pipeline_components(cfg: DictConfig, task_id: str = None):
     """
     Creates and initializes the core components of the agent pipeline.
 
     Args:
         cfg: The Hydra configuration object.
+        task_id: Optional task identifier for task-specific caching in MCP servers.
 
     Returns:
         Tuple of (main_agent_tool_manager, sub_agent_tool_managers, output_formatter)
     """
     # Create ToolManagers for main agent and sub-agents
     main_agent_mcp_server_configs, main_agent_blacklist = create_mcp_server_parameters(
-        cfg, cfg.agent.main_agent
+        cfg, cfg.agent.main_agent, task_id=task_id
     )
     main_agent_tool_manager = ToolManager(
         main_agent_mcp_server_configs,
@@ -204,7 +205,7 @@ def create_pipeline_components(cfg: DictConfig):
 
     for sub_agent in cfg.agent.sub_agents:
         sub_agent_mcp_server_configs, sub_agent_blacklist = (
-            create_mcp_server_parameters(cfg, cfg.agent.sub_agents[sub_agent])
+            create_mcp_server_parameters(cfg, cfg.agent.sub_agents[sub_agent], task_id=task_id)
         )
         sub_agent_tool_manager = ToolManager(
             sub_agent_mcp_server_configs,
