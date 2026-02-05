@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 # Initialize task-specific cache context if MIROFLOW_TASK_ID is set
 # This must be done at module load time to ensure all cache operations use the correct task_id
 _task_id = os.getenv("MIROFLOW_TASK_ID")
+_cache_enabled_env = os.getenv("MIROFLOW_SEARCH_CACHE_ENABLED", "true")
 logger.info(f"[SEARCH_CACHE] serper_mcp_server module loading, MIROFLOW_TASK_ID env var = {_task_id}")
+logger.info(f"[SEARCH_CACHE] serper_mcp_server module loading, MIROFLOW_SEARCH_CACHE_ENABLED env var = {_cache_enabled_env}")
 if _task_id:
     set_current_task_id(_task_id)
     logger.info(f"[SEARCH_CACHE] MCP server initialized with task_id: {_task_id}")
@@ -42,7 +44,7 @@ else:
 # This instance will be reused for all tool calls in this process
 # IMPORTANT: If task_id is None, this will create a pid-based cache which won't be merged!
 _mcp_server_cache = get_search_cache(task_id=_task_id)
-logger.info(f"[SEARCH_CACHE] Created MCP server cache instance: task_id={_mcp_server_cache.task_id}, file={_mcp_server_cache.task_cache_file}")
+logger.info(f"[SEARCH_CACHE] Created MCP server cache instance: task_id={_mcp_server_cache.task_id}, file={_mcp_server_cache.task_cache_file}, enabled={_mcp_server_cache.enabled}")
 
 
 def download_and_encode_images(
@@ -182,7 +184,10 @@ def google_search(
     # Check cache first
     # Use the module-level cache instance instead of creating a new one
     cache = _mcp_server_cache
-    logger.info(f"[SEARCH_CACHE] google_search: using cache task_id={cache.task_id}, cache_file={cache.task_cache_file}")
+    if cache.enabled:
+        logger.info(f"[SEARCH_CACHE] google_search: using cache task_id={cache.task_id}, cache_file={cache.task_cache_file}")
+    else:
+        logger.info(f"[SEARCH_CACHE] google_search: cache is disabled, bypassing cache")
     # Normalize parameters to match actual API request
     normalized_num = num if num is not None else 10
     normalized_page = page if page is not None else 1
@@ -257,12 +262,16 @@ def google_search(
         # Cache the result with the same normalized parameters
         logger.info(f"[SEARCH_CACHE] google_search: calling cache.set for query='{q[:50]}...'")
         cache.set("google_search", q, result_json, **cache_params)
-        logger.info(f"[SEARCH_CACHE] google_search: cache.set completed, cache now has {len(cache._memory_cache)} entries")
+        if cache.enabled:
+            logger.info(f"[SEARCH_CACHE] google_search: cache.set completed, cache now has {len(cache._memory_cache)} entries")
+        else:
+            logger.info(f"[SEARCH_CACHE] google_search: cache.set skipped (cache disabled)")
 
         # Immediately save to file after caching
         # This is necessary because each tool call runs in a separate process
         cache.save_to_file(force=True)
-        logger.info(f"[SEARCH_CACHE] google_search: saved cache to file")
+        if cache.enabled:
+            logger.info(f"[SEARCH_CACHE] google_search: saved cache to file")
 
         return result_json
 
@@ -410,7 +419,10 @@ def image_search(
     # Check cache first
     # Use the module-level cache instance instead of creating a new one
     cache = _mcp_server_cache
-    logger.info(f"[SEARCH_CACHE] image_search: using cache task_id={cache.task_id}, cache_file={cache.task_cache_file}")
+    if cache.enabled:
+        logger.info(f"[SEARCH_CACHE] image_search: using cache task_id={cache.task_id}, cache_file={cache.task_cache_file}")
+    else:
+        logger.info(f"[SEARCH_CACHE] image_search: cache is disabled, bypassing cache")
     # Normalize parameters to match actual API request
     normalized_num = num if num is not None else 5
     normalized_page = page if page is not None else 1
@@ -465,12 +477,16 @@ def image_search(
         # Cache the result with the same normalized parameters
         logger.info(f"[SEARCH_CACHE] image_search: calling cache.set for query='{q[:50]}...'")
         cache.set("image_search", q, result_json, **cache_params)
-        logger.info(f"[SEARCH_CACHE] image_search: cache.set completed, cache now has {len(cache._memory_cache)} entries")
+        if cache.enabled:
+            logger.info(f"[SEARCH_CACHE] image_search: cache.set completed, cache now has {len(cache._memory_cache)} entries")
+        else:
+            logger.info(f"[SEARCH_CACHE] image_search: cache.set skipped (cache disabled)")
 
         # Immediately save to file after caching
         # This is necessary because each tool call runs in a separate process
         cache.save_to_file(force=True)
-        logger.info(f"[SEARCH_CACHE] image_search: saved cache to file")
+        if cache.enabled:
+            logger.info(f"[SEARCH_CACHE] image_search: saved cache to file")
 
         return result_json
 

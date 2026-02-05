@@ -1072,7 +1072,7 @@ class CommonBenchmark:
         try:
             from miroflow_tools.mcp_servers.utils.search_cache import get_search_cache, get_current_task_id
             cache = get_search_cache()
-            if cache._memory_cache:  # Only save if cache was used
+            if cache.enabled and cache._memory_cache:  # Only save if cache was enabled and used
                 # Check if we're in a worker process (task_id set) or main process (no task_id)
                 # In multiprocessing mode, main process doesn't need to save since merge already happened
                 current_task_id = get_current_task_id()
@@ -1092,6 +1092,8 @@ class CommonBenchmark:
                 else:
                     # We're in worker process - cache is managed by MCP subprocesses, skip save
                     print(f"Skipping cache save in worker process (task_id={current_task_id}, cache managed by MCP subprocesses)")
+            elif not cache.enabled:
+                print(f"Search cache is disabled, skipping cache save")
         except Exception as e:
             print(f"Warning: Failed to save search cache: {e}")
 
