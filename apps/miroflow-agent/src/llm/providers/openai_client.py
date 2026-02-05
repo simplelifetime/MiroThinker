@@ -563,11 +563,15 @@ class OpenAIClient(BaseClient):
         if has_tool_call_ids and self.use_tool_calls:
             # OpenAI native function calling format
             # Each tool result needs its own message with 'tool' role
+
+            # Collect multi-modal content items that need to be added as user messages
+            multimodal_contents_for_user = []
+
             for item in all_tool_results_content_with_id:
                 tool_call_id = item[0]
                 tool_name = item[1]
                 tool_result_content = item[2]
-                
+
                 # Extract text content
                 if isinstance(tool_result_content, dict):
                     if tool_result_content.get("type") == "text":
@@ -577,15 +581,22 @@ class OpenAIClient(BaseClient):
                 elif isinstance(tool_result_content, list):
                     # Multi-modal format: extract text parts, note images
                     text_parts = []
+                    has_images = False
                     for content_item in tool_result_content:
                         if content_item.get("type") == "text":
                             text_parts.append(content_item.get("text", ""))
                         elif content_item.get("type") == "image_url":
                             text_parts.append("[Image content included]")
+                            has_images = True
                     content = "\n".join(text_parts)
+
+                    # If this tool result contains images, save the full multi-modal content
+                    # to be added as a user message later (so LLM can see the images)
+                    if has_images:
+                        multimodal_contents_for_user.append(tool_result_content)
                 else:
                     content = str(tool_result_content)
-                
+
                 # OpenAI function calling requires: role, tool_call_id, name, content
                 message_history.append({
                     "role": "tool",
@@ -593,7 +604,27 @@ class OpenAIClient(BaseClient):
                     "name": tool_name,
                     "content": content,
                 })
-            
+
+            # If any tool results contained multi-modal content with images,
+            # add them as user messages so the LLM can actually see the images
+            if multimodal_contents_for_user:
+                # Merge all multi-modal content into a single user message
+                merged_content = []
+                for multimodal_content in multimodal_contents_for_user:
+                    merged_content.extend(multimodal_content)
+
+                # Check if we actually have images
+                has_images = any(
+                    item.get("type") == "image_url" for item in merged_content
+                )
+
+                if has_images:
+                    message_history.append({
+                        "role": "user",
+                        "content": merged_content,
+                    })
+                    logger.info(f"Added user message with multi-modal content containing {sum(1 for item in merged_content if item.get('type') == 'image_url')} image(s)")
+
             return message_history
         
         # MCP XML format: use 'user' role with merged content

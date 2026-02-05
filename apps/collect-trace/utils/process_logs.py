@@ -12,14 +12,12 @@ def get_successful_log_paths(jsonl_file_path: str) -> list:
     Collects the paths of successful log files from a dataset.
 
     This function extracts log file paths of successful records based on
-    the value of `final_judge_result`. If the dataset has been fully
-    processed, it reads from a `benchmark_results.jsonl` file. Otherwise,
-    if processing was interrupted, it falls back to scanning individual
-    `.json` files in the given directory.
+    the value of `final_judge_result`. It scans both the JSONL file and
+    all JSON files in the directory to ensure all successful cases are captured.
 
     Success is determined by:
-    - `PASS_AT_K_SUCCESS` for records in JSONL files.
-    - `CORRECT` for records in individual JSON files.
+    - `PASS_AT_K_SUCCESS` for records in JSONL files
+    - `CORRECT` for records in individual JSON files
 
     Args:
         jsonl_file_path (str): Path to a JSONL file or a directory of JSON files.
@@ -28,8 +26,12 @@ def get_successful_log_paths(jsonl_file_path: str) -> list:
         list: A list of log file paths for successful records.
     """
     log_paths = []
+    seen_paths = set()  # To avoid duplicates
 
     if jsonl_file_path.endswith(".jsonl"):
+        # First, extract paths from the JSONL file
+        jsonl_dir = os.path.abspath(os.path.dirname(jsonl_file_path))
+
         with open(jsonl_file_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -39,16 +41,63 @@ def get_successful_log_paths(jsonl_file_path: str) -> list:
                         if data.get("final_judge_result") == "PASS_AT_K_SUCCESS":
                             log_path = data.get("log_file_path")
                             if log_path:
-                                log_paths.append(log_path)
+                                # Resolve relative paths
+                                if not os.path.isabs(log_path):
+                                    log_path = os.path.join(jsonl_dir, log_path)
+                                    log_path = os.path.abspath(log_path)
+
+                                # Verify the file actually exists and is CORRECT
+                                # (PASS_AT_K_SUCCESS may point to an attempt that's not actually CORRECT)
+                                if os.path.exists(log_path) and log_path not in seen_paths:
+                                    try:
+                                        with open(log_path, "r", encoding="utf-8") as f:
+                                            file_data = json.load(f)
+                                        # Only include if the file itself is marked as CORRECT
+                                        if file_data.get("final_judge_result") == "CORRECT":
+                                            log_paths.append(log_path)
+                                            seen_paths.add(log_path)
+                                    except Exception:
+                                        # If we can't read the file, skip it
+                                        continue
                     except json.JSONDecodeError:
                         continue
+
+        # Then, scan all JSON files in the directory to find CORRECT cases
+        # This captures successful tasks that may not be in the JSONL summary
+        for filename in os.listdir(jsonl_dir):
+            if not filename.endswith(".json") or filename.endswith("_images.json"):
+                continue
+
+            filepath = os.path.join(jsonl_dir, filename)
+            abs_filepath = os.path.abspath(filepath)
+
+            # Skip if already processed
+            if abs_filepath in seen_paths:
+                continue
+
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+
+            try:
+                final_judge_result = data.get("final_judge_result")
+                if final_judge_result == "CORRECT":
+                    log_paths.append(abs_filepath)
+                    seen_paths.add(abs_filepath)
+            except KeyError:
+                continue
+
     else:
+        # If directory path is provided directly
         filenames = os.listdir(jsonl_file_path)
         filenames = [filename for filename in filenames if filename.endswith(".json")]
         for filename in filenames:
             filepath = os.path.join(jsonl_file_path, filename)
             try:
-                data = json.load(open(filepath, "r"))
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
             except Exception:
                 continue
             try:
@@ -151,3 +200,23 @@ if __name__ == "__main__":
                     print(f"Warning: Failed to convert {json_file}: {result.stderr}")
             except Exception as e:
                 print(f"Warning: Error converting {json_file}: {e}")
+
+    # Merge all ShareGPT logs into one file
+    print("\n=== Merging ShareGPT logs ===")
+    merged_data = []
+    for json_file in os.listdir(success_sharegpt_log_dir):
+        if json_file.endswith("_sharegpt.json"):
+            json_path = os.path.join(success_sharegpt_log_dir, json_file)
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    merged_data.append(data)
+            except Exception as e:
+                print(f"Warning: Failed to read {json_file}: {e}")
+
+    # Save merged file
+    merged_file = os.path.join(success_sharegpt_log_dir, "merged.json")
+    with open(merged_file, 'w', encoding='utf-8') as f:
+        json.dump(merged_data, f, ensure_ascii=False, indent=2)
+
+    print(f"✓ Merged {len(merged_data)} ShareGPT logs to: {merged_file}")

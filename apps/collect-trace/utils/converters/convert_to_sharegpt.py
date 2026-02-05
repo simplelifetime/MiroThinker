@@ -185,6 +185,50 @@ def process_content_with_images(
     return processed_content, image_paths
 
 
+def convert_tool_calls_to_mcp_format(tool_calls: List[Dict[str, Any]]) -> str:
+    """
+    Convert OpenAI-style tool_calls to MCP format string.
+
+    Args:
+        tool_calls: List of tool call dictionaries in OpenAI format
+
+    Returns:
+        MCP-formatted tool call string
+    """
+    mcp_tool_call_templates = []
+
+    for tool_call in tool_calls:
+        function = tool_call.get("function", {})
+        tool_name = function.get("name", "")
+        arguments = function.get("arguments", "{}")
+
+        # Parse tool name to extract server and tool name
+        # Format: server_name-tool_name
+        if "-" in tool_name:
+            parts = tool_name.rsplit("-", maxsplit=1)
+            if len(parts) == 2:
+                server_name, tool_name_only = parts
+            else:
+                server_name = tool_name
+                tool_name_only = tool_name
+        else:
+            server_name = tool_name
+            tool_name_only = tool_name
+
+        # Try to parse arguments as JSON for pretty formatting
+        try:
+            arguments_json = json.loads(arguments)
+            arguments_str = json.dumps(arguments_json, ensure_ascii=False)
+        except:
+            arguments_str = arguments
+
+        mcp_tool_call_template = f"\n\n<use_mcp_tool>\n<server_name>{server_name}</server_name>\n<tool_name>{tool_name_only}</tool_name>\n<arguments>\n{arguments_str}\n</arguments>\n</use_mcp_tool>"
+
+        mcp_tool_call_templates.append(mcp_tool_call_template)
+
+    return "\n\n".join(mcp_tool_call_templates)
+
+
 def convert_messages_to_sharegpt(
     messages: List[Dict[str, Any]], images_dir: Path, task_id: str, existing_images: List[str] = None
 ) -> Dict[str, Any]:
@@ -198,9 +242,17 @@ def convert_messages_to_sharegpt(
         existing_images: List of existing image file paths (if already saved)
 
     Returns:
-        ShareGPT-formatted dictionary with 'messages' and 'images' keys
+        ShareGPT-formatted dictionary with 'conversations' and 'images' keys
+        Format: {"conversations": [{"from": "human/gpt", "value": "..."}], "images": [...]}
     """
-    sharegpt_messages = []
+    # Role mapping for ShareGPT format
+    role_mapping = {
+        "user": "human",
+        "assistant": "gpt",
+        "tool": "human"  # Tool return results are represented as human messages
+    }
+
+    sharegpt_conversations = []
     all_image_paths = []
     image_counter = [0]  # Use list to allow mutation in nested function
 
@@ -208,27 +260,89 @@ def convert_messages_to_sharegpt(
         role = message.get("role", "")
         content = message.get("content", "")
 
-        # Skip certain message types
-        if role == "tool" or role == "system":
+        # Skip system messages only
+        if role == "system":
             continue
 
-        # Process content and extract images
-        processed_content, image_paths = process_content_with_images(
-            content, images_dir, task_id, msg_idx, image_counter, existing_images
-        )
+        # Map role to ShareGPT format
+        sharegpt_role = role_mapping.get(role, role)
 
-        # Add to messages if content is not empty
-        if processed_content:
-            sharegpt_messages.append({
-                "content": processed_content,
-                "role": role
-            })
+        # Handle tool_calls in assistant messages
+        if role == "assistant" and "tool_calls" in message and message["tool_calls"]:
+            # Get reasoning content if exists
+            reasoning_content = message.get("reasoning_content", "")
 
-        # Collect all image paths
-        all_image_paths.extend(image_paths)
+            # Process content and extract images
+            processed_content, image_paths = process_content_with_images(
+                content, images_dir, task_id, msg_idx, image_counter, existing_images
+            )
+
+            # Convert tool_calls to MCP format
+            tool_calls_str = convert_tool_calls_to_mcp_format(message["tool_calls"])
+
+            # Build final content: <thought>\nreasoning\n</thought>content + tool_calls
+            final_content_parts = []
+
+            # Add reasoning content if present
+            if reasoning_content:
+                final_content_parts.append(f"<thought>\n{reasoning_content}\n</thought>")
+
+            # Add main content
+            if processed_content:
+                final_content_parts.append(processed_content)
+
+            # Add tool calls
+            final_content_parts.append(tool_calls_str)
+
+            # Join all parts
+            final_content = "".join(final_content_parts)
+
+            # Add to conversations if content is not empty
+            if final_content.strip():
+                sharegpt_conversations.append({
+                    "from": sharegpt_role,
+                    "value": final_content
+                })
+
+            # Collect all image paths
+            all_image_paths.extend(image_paths)
+
+        elif role == "tool":
+            # Tool return results - include as human messages
+            if content:
+                sharegpt_conversations.append({
+                    "from": sharegpt_role,
+                    "value": content
+                })
+
+        else:
+            # Regular user or assistant messages
+            # Process content and extract images
+            processed_content, image_paths = process_content_with_images(
+                content, images_dir, task_id, msg_idx, image_counter, existing_images
+            )
+
+            # Handle reasoning_content in assistant messages without tool_calls
+            final_content = processed_content
+            if role == "assistant" and "reasoning_content" in message and message["reasoning_content"]:
+                reasoning_content = message["reasoning_content"]
+                if final_content:
+                    final_content = f"<thought>\n{reasoning_content}\n</thought>{final_content}"
+                else:
+                    final_content = f"<thought>\n{reasoning_content}\n</thought>"
+
+            # Add to conversations if content is not empty
+            if final_content:
+                sharegpt_conversations.append({
+                    "from": sharegpt_role,
+                    "value": final_content
+                })
+
+            # Collect all image paths
+            all_image_paths.extend(image_paths)
 
     return {
-        "messages": sharegpt_messages,
+        "conversations": sharegpt_conversations,
         "images": all_image_paths
     }
 
@@ -248,12 +362,9 @@ def extract_and_save_sharegpt(
         input_filename: Input filename (without extension)
         original_log_path: Path to original log file (for loading existing images)
     """
-    # Create images directory
-    images_dir = output_dir / f"{input_filename}_images"
-    images_dir.mkdir(parents=True, exist_ok=True)
-
     # Try to find and use existing images directory
     existing_images = []
+    images_dir = None  # Only create if needed for new base64 images
 
     if original_log_path:
         original_path = Path(original_log_path)
@@ -281,6 +392,10 @@ def extract_and_save_sharegpt(
                     print(f"✓ Found {len(existing_images)} existing image(s) in: {images_dir}")
                     break
 
+    # If no existing images found, use output_dir as fallback for any new base64 images
+    if not images_dir:
+        images_dir = output_dir
+
     # 1. Extract main_agent_message_history
     main_agent_history = log_data.get("main_agent_message_history", {})
     if main_agent_history and "message_history" in main_agent_history:
@@ -296,7 +411,7 @@ def extract_and_save_sharegpt(
                 json.dump(sharegpt_data, f, ensure_ascii=False, indent=2)
 
             print(f"✓ Saved main agent ShareGPT: {main_output_file}")
-            print(f"  - Messages: {len(sharegpt_data['messages'])}")
+            print(f"  - Conversations: {len(sharegpt_data['conversations'])}")
             print(f"  - Images: {len(sharegpt_data['images'])}")
 
     # 2. Extract sub_agent_message_history_sessions
@@ -321,7 +436,7 @@ def extract_and_save_sharegpt(
                         json.dump(sharegpt_data, f, ensure_ascii=False, indent=2)
 
                     print(f"✓ Saved sub agent {session_name} ShareGPT: {sub_output_file}")
-                    print(f"  - Messages: {len(sharegpt_data['messages'])}")
+                    print(f"  - Conversations: {len(sharegpt_data['conversations'])}")
                     print(f"  - Images: {len(sharegpt_data['images'])}")
 
 
