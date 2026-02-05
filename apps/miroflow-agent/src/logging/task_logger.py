@@ -310,9 +310,6 @@ class TaskLog:
         result = {"role": message["role"]}
         content = message["content"]
 
-        # Use global counter for this message to ensure unique keys
-        image_counter = 0
-
         # Handle different content formats
         if isinstance(content, list):
             # Multi-modal content (list of content items)
@@ -323,13 +320,10 @@ class TaskLog:
                         # Extract base64 data before replacing
                         image_url = item.get("image_url", {}).get("url", "")
                         if image_url and image_url != "<image>" and image_url.startswith("data:image"):
-                            # Generate unique key for this image using global counter
+                            # Generate unique key using global counter
                             image_key = f"{image_key_prefix}_{len(self._images_data)}" if image_key_prefix else f"image_{len(self._images_data)}"
                             # Store the base64 data
-                            # Only store if not already present (avoid duplicate storage)
-                            if image_key not in self._images_data:
-                                self._images_data[image_key] = image_url
-                            image_counter += 1
+                            self._images_data[image_key] = image_url
 
                         # Replace with placeholder (use a copy to avoid modifying original)
                         serialized_content.append({
@@ -349,7 +343,7 @@ class TaskLog:
             # Text-only content - check if it contains base64 data
             if content.startswith("data:image") and ";base64," in content:
                 # Store the base64 data
-                image_key = f"{image_key_prefix}_0" if image_key_prefix else f"image_{len(self._images_data)}"
+                image_key = f"{image_key_prefix}_{len(self._images_data)}" if image_key_prefix else f"image_{len(self._images_data)}"
                 self._images_data[image_key] = content
                 result["content"] = "<image>"
             else:
@@ -378,11 +372,13 @@ class TaskLog:
         Note:
             Falls back to ASCII encoding if Unicode encoding fails.
         """
-        # Don't clear _images_data - it may contain images from previous saves
-        # This ensures we don't lose images when save() is called multiple times
+        # Clear _images_data before calling asdict() to prevent base64 data in JSON
+        # Note: _images_data will be repopulated during serialize_for_json()
+        self._images_data.clear()
 
-        # Convert to dict first
+        # Convert to dict first (without _images_data)
         data_dict = asdict(self)
+
         # Serialize any non-JSON-serializable objects
         # Use different prefixes for main and sub agents
         serialized_dict = self.serialize_for_json(data_dict, image_key_prefix="main")
@@ -487,6 +483,9 @@ class TaskLog:
 
         # Save images as files if any images were found
         saved_image_paths = self._save_images_as_files(timestamp)
+
+        # Clear _images_data after saving to prevent accumulation across multiple save() calls
+        self._images_data.clear()
 
         return filename
 
