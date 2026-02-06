@@ -220,3 +220,61 @@ if __name__ == "__main__":
         json.dump(merged_data, f, ensure_ascii=False, indent=2)
 
     print(f"✓ Merged {len(merged_data)} ShareGPT logs to: {merged_file}")
+
+    # Generate parquet file with base64 encoded images
+    print("\n=== Generating parquet file with base64 images ===")
+    try:
+        import pandas as pd
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        def process_sample(data_with_index):
+            """Process a single sample for parquet format"""
+            data, index = data_with_index
+            # Handle both 'conversations' and 'messages' keys
+            conversations = data.get('conversations', data.get('messages', []))
+
+            # Process images if present, always initialize with empty list
+            images = []
+            if "images" in data.keys() and data["images"]:
+                for image_path in data['images']:
+                    # Handle both hdfs and local paths
+                    image_path = image_path.replace("hdfs", "bn/ic-vlm/personal")
+
+                    try:
+                        with open(image_path, "rb") as f:
+                            image_bytes = f.read()
+                        images.append(image_bytes)
+                    except Exception as e:
+                        print(f"Warning: Failed to read image {image_path}: {e}")
+                        continue
+
+            # Always return all three fields for consistency
+            return {
+                "id": data.get('id', f"sample_{index}"),
+                "images": images,
+                "conversations": conversations
+            }
+
+        # Process all samples
+        processed_data = []
+        for idx, data in enumerate(merged_data):
+            processed = process_sample((data, idx))
+            processed_data.append(processed)
+
+        # Create DataFrame
+        df = pd.DataFrame(processed_data)
+
+        # Save as parquet
+        parquet_file = os.path.join(success_sharegpt_log_dir, "merged.parquet")
+        df.to_parquet(parquet_file, index=False)
+
+        print(f"✓ Generated parquet file: {parquet_file}")
+        print(f"  - Total samples: {len(processed_data)}")
+        print(f"  - Samples with images: {sum(1 for d in processed_data if 'images' in d and d['images'])}")
+
+    except ImportError:
+        print("⚠ Warning: pandas or pyarrow not installed. Skipping parquet generation.")
+        print("  Install with: uv add pandas pyarrow")
+    except Exception as e:
+        print(f"⚠ Warning: Failed to generate parquet file: {e}")

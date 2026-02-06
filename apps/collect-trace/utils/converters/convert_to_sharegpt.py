@@ -260,12 +260,9 @@ def convert_messages_to_sharegpt(
         role = message.get("role", "")
         content = message.get("content", "")
 
-        # Skip system messages only
-        if role == "system":
-            continue
-
         # Map role to ShareGPT format
-        sharegpt_role = role_mapping.get(role, role)
+        # Keep system messages as "system" role
+        sharegpt_role = role_mapping.get(role, role) if role != "system" else "system"
 
         # Handle tool_calls in assistant messages
         if role == "assistant" and "tool_calls" in message and message["tool_calls"]:
@@ -400,6 +397,16 @@ def extract_and_save_sharegpt(
     main_agent_history = log_data.get("main_agent_message_history", {})
     if main_agent_history and "message_history" in main_agent_history:
         main_messages = main_agent_history["message_history"]
+
+        # Prepend system_prompt if it exists
+        system_prompt = main_agent_history.get("system_prompt", "")
+        if system_prompt and main_messages:
+            # Create a new messages list with system prompt first
+            main_messages_with_system = [
+                {"role": "system", "content": system_prompt}
+            ] + main_messages
+            main_messages = main_messages_with_system
+
         if main_messages:
             sharegpt_data = convert_messages_to_sharegpt(
                 main_messages, images_dir, input_filename, existing_images
