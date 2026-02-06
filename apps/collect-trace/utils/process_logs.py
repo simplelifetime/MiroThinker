@@ -5,6 +5,9 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import cpu_count
 
 
 def get_successful_log_paths(jsonl_file_path: str) -> list:
@@ -132,13 +135,23 @@ if __name__ == "__main__":
     success_sharegpt_log_dir = parent_dir + "/successful_sharegpt_logs"
     os.makedirs(success_log_dir, exist_ok=True)
     os.makedirs(success_sharegpt_log_dir, exist_ok=True)
-    print(f"Successful logs directory: {success_log_dir}")
-    print(f"Successful ShareGPT logs directory: {success_sharegpt_log_dir}")
+
+    print(f"\n{'='*60}")
+    print(f"Processing {len(result)} successful logs")
+    print(f"{'='*60}")
+    print(f"Output directories:")
+    print(f"  • Logs:      {success_log_dir}")
+    print(f"  • ShareGPT:  {success_sharegpt_log_dir}")
+
+    # Copy files with progress indicator
+    copied_files = 0
+    copied_images = 0
+    skipped_images = 0
 
     for i, path in enumerate(result, 1):
         basename = os.path.basename(path)
-        print(f"Copying file: {path} to {success_log_dir}/{basename}")
         shutil.copy(path, f"{success_log_dir}/{basename}")
+        copied_files += 1
 
         # Get the base filename without extension
         file_basename = os.path.splitext(basename)[0]
@@ -155,54 +168,124 @@ if __name__ == "__main__":
         if os.path.exists(new_format_images_dir) and os.path.isdir(new_format_images_dir):
             images_basename = os.path.basename(new_format_images_dir)
             dest_images_dir = os.path.join(success_log_dir, images_basename)
-            print(f"Copying images directory (new format): {new_format_images_dir} to {dest_images_dir}")
             if os.path.exists(dest_images_dir):
                 shutil.rmtree(dest_images_dir)
             shutil.copytree(new_format_images_dir, dest_images_dir)
+            copied_images += 1
         elif os.path.exists(old_format_images_dir) and os.path.isdir(old_format_images_dir):
             images_basename = os.path.basename(old_format_images_dir)
             dest_images_dir = f"{success_log_dir}/{images_basename}"
-            print(f"Copying images directory (old format): {old_format_images_dir} to {dest_images_dir}")
             if os.path.exists(dest_images_dir):
                 shutil.rmtree(dest_images_dir)
             shutil.copytree(old_format_images_dir, dest_images_dir)
+            copied_images += 1
+        else:
+            skipped_images += 1
 
         # Also copy the old-style images JSON file if it exists (for backward compatibility)
         images_file = path.replace(".json", "_images.json")
         if os.path.exists(images_file):
             images_basename = os.path.basename(images_file)
-            print(f"Copying images file: {images_file} to {success_log_dir}/{images_basename}")
             shutil.copy(images_file, f"{success_log_dir}/{images_basename}")
 
-    # Convert to ChatML format
-    print("\n=== Converting to ChatML format ===")
-    os.system(
-        f"uv run utils/converters/convert_to_chatml_auto_batch.py {success_log_dir}/*.json -o {success_chatml_log_dir}"
-    )
-    os.system(
-        f"uv run utils/merge_chatml_msgs_to_one_json.py --input_dir {success_chatml_log_dir}"
-    )
+        # Simple progress indicator
+        if i % 10 == 0 or i == len(result):
+            print(f"  Progress: [{i}/{len(result)}] files copied...", end='\r')
 
-    # Convert to ShareGPT format
-    print("\n=== Converting to ShareGPT format ===")
-    import subprocess
-    for json_file in os.listdir(success_log_dir):
-        if json_file.endswith(".json") and not json_file.endswith("_images.json"):
-            json_path = os.path.join(success_log_dir, json_file)
-            print(f"Converting {json_file} to ShareGPT format...")
-            try:
-                result = subprocess.run(
-                    ["uv", "run", "utils/converters/convert_to_sharegpt.py", json_path, success_sharegpt_log_dir],
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode != 0:
-                    print(f"Warning: Failed to convert {json_file}: {result.stderr}")
-            except Exception as e:
-                print(f"Warning: Error converting {json_file}: {e}")
+    print(f"\n✓ Copied {copied_files} log files")
+    print(f"  • With images: {copied_images}")
+    print(f"  • Without images: {skipped_images}")
+
+    # # Convert to ChatML format (currently disabled)
+    # # Uncomment if ChatML format is needed
+    # print(f"\n[1/3] Converting to ChatML format...")
+    # result = subprocess.run(
+    #     f"uv run utils/converters/convert_to_chatml_auto_batch.py {success_log_dir}/*.json -o {success_chatml_log_dir}",
+    #     shell=True,
+    #     capture_output=True,
+    #     text=True
+    # )
+    # if result.returncode == 0:
+    #     print(f"  ✓ ChatML conversion completed")
+    # else:
+    #     print(f"  ⚠ ChatML conversion had warnings")
+    #
+    # result = subprocess.run(
+    #     f"uv run utils/merge_chatml_msgs_to_one_json.py --input_dir {success_chatml_log_dir}",
+    #     shell=True,
+    #     capture_output=True,
+    #     text=True
+    # )
+    # if result.returncode == 0:
+    #     print(f"  ✓ ChatML messages merged")
+    # else:
+    #     print(f"  ⚠ ChatML merge had warnings")
+
+    # Convert to ShareGPT format (with multiprocessing)
+    print(f"\n[1/2] Converting to ShareGPT format (parallel)...")
+
+    sharegpt_files = [f for f in os.listdir(success_log_dir) if f.endswith(".json") and not f.endswith("_images.json")]
+
+    # Determine number of worker processes (use CPU count, but cap at 16 for safety)
+    num_workers = min(cpu_count(), 32)
+    print(f"  Using {num_workers} parallel workers for {len(sharegpt_files)} files...")
+
+    def convert_single_file(json_file):
+        """Convert a single file to ShareGPT format"""
+        json_path = os.path.join(success_log_dir, json_file)
+        try:
+            result = subprocess.run(
+                ["uv", "run", "utils/converters/convert_to_sharegpt.py", json_path, success_sharegpt_log_dir],
+                capture_output=True,
+                text=True,
+                timeout=60  # 60 second timeout per file
+            )
+            if result.returncode == 0:
+                return (json_file, True, None)
+            else:
+                return (json_file, False, result.stderr)
+        except subprocess.TimeoutExpired:
+            return (json_file, False, "Timeout after 60 seconds")
+        except Exception as e:
+            return (json_file, False, str(e))
+
+    # Process files in parallel
+    converted_count = 0
+    failed_count = 0
+    failed_files = []
+
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        # Submit all tasks
+        future_to_file = {executor.submit(convert_single_file, json_file): json_file
+                          for json_file in sharegpt_files}
+
+        # Process completed tasks with progress indicator
+        completed = 0
+        for future in as_completed(future_to_file):
+            completed += 1
+            json_file, success, error = future.result()
+
+            if success:
+                converted_count += 1
+            else:
+                failed_count += 1
+                failed_files.append((json_file, error))
+
+            # Progress indicator
+            if completed % 10 == 0 or completed == len(sharegpt_files):
+                print(f"  Progress: [{completed}/{len(sharegpt_files)}] files processed...", end='\r')
+
+    print(f"\n  ✓ Converted: {converted_count} files")
+    if failed_count > 0:
+        print(f"  ⚠ Failed: {failed_count} files")
+        # Show first 5 failures only
+        for json_file, error in failed_files[:5]:
+            print(f"    - {json_file}: {error[:50]}...")
+        if failed_count > 5:
+            print(f"    ... and {failed_count - 5} more failures")
 
     # Merge all ShareGPT logs into one file
-    print("\n=== Merging ShareGPT logs ===")
+    print(f"\n[2/2] Merging ShareGPT logs...")
     merged_data = []
     for json_file in os.listdir(success_sharegpt_log_dir):
         if json_file.endswith("_sharegpt.json"):
@@ -212,17 +295,18 @@ if __name__ == "__main__":
                     data = json.load(f)
                     merged_data.append(data)
             except Exception as e:
-                print(f"Warning: Failed to read {json_file}: {e}")
+                print(f"  ⚠ Failed to read {json_file}: {e}")
 
     # Save merged file
     merged_file = os.path.join(success_sharegpt_log_dir, "merged.json")
     with open(merged_file, 'w', encoding='utf-8') as f:
         json.dump(merged_data, f, ensure_ascii=False, indent=2)
 
-    print(f"✓ Merged {len(merged_data)} ShareGPT logs to: {merged_file}")
+    print(f"  ✓ Merged {len(merged_data)} ShareGPT logs")
+    print(f"  Output: {merged_file}")
 
     # Generate parquet file with base64 encoded images
-    print("\n=== Generating parquet file with base64 images ===")
+    print(f"\n[3/3] Generating parquet file with base64 images...")
     try:
         import pandas as pd
         import pyarrow as pa
@@ -269,12 +353,23 @@ if __name__ == "__main__":
         parquet_file = os.path.join(success_sharegpt_log_dir, "merged.parquet")
         df.to_parquet(parquet_file, index=False)
 
-        print(f"✓ Generated parquet file: {parquet_file}")
-        print(f"  - Total samples: {len(processed_data)}")
-        print(f"  - Samples with images: {sum(1 for d in processed_data if 'images' in d and d['images'])}")
+        samples_with_images = sum(1 for d in processed_data if d['images'])
+        print(f"  ✓ Generated parquet file")
+        print(f"    Total samples: {len(processed_data)}")
+        print(f"    With images: {samples_with_images}")
+        print(f"    Output: {parquet_file}")
 
     except ImportError:
-        print("⚠ Warning: pandas or pyarrow not installed. Skipping parquet generation.")
-        print("  Install with: uv add pandas pyarrow")
+        print(f"  ⚠ Skipped parquet generation (missing pandas/pyarrow)")
+        print(f"    Install with: uv add pandas pyarrow")
     except Exception as e:
-        print(f"⚠ Warning: Failed to generate parquet file: {e}")
+        print(f"  ⚠ Failed to generate parquet: {e}")
+
+    # Final summary
+    print(f"\n{'='*60}")
+    print(f"✓ Processing completed!")
+    print(f"{'='*60}")
+    print(f"Generated files:")
+    print(f"  1. {success_sharegpt_log_dir}/merged.json")
+    print(f"  2. {success_sharegpt_log_dir}/merged.parquet")
+    print(f"{'='*60}\n")
