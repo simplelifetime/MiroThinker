@@ -306,7 +306,7 @@ async def zoom_in(
         if width <= 0 or height <= 0:
             return f'[{{"error": "Width and height must be positive (width={width}, height={height})"}}]'
         if x + width > img_width or y + height > img_height:
-            return f'[{{"error": "Region extends beyond image bounds (image size: {img_width}x{img_height}, region: {x}+{width}x{y}+{height})"}}]'
+            return f'[{{"error": "Your cropped region extends beyond image bounds (image size: {img_width}x{img_height}, your cropped region: ({x}+{width})x({y}+{height}))"}}]'
 
         # Crop the region
         box = (x, y, x + width, y + height)

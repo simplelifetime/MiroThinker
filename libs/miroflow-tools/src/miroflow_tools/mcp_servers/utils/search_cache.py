@@ -113,9 +113,9 @@ class SearchCache:
             try:
                 with open(self.global_cache_file, 'r', encoding='utf-8') as f:
                     self._memory_cache = json.load(f)
-                    print(f"[SEARCH_CACHE] Loaded {len(self._memory_cache)} entries from global cache")
+                    # print(f"[SEARCH_CACHE] Loaded {len(self._memory_cache)} entries from global cache")
             except Exception as e:
-                print(f"[SEARCH_CACHE] Warning: Failed to load global cache: {e}")
+                # print(f"[SEARCH_CACHE] Warning: Failed to load global cache: {e}")
                 self._memory_cache = {}
         else:
             logger.info(f"[SEARCH_CACHE] No existing global cache found, starting with empty cache")
@@ -131,7 +131,7 @@ class SearchCache:
                 if task_cache_data:
                     # Merge task cache into memory cache
                     self._memory_cache.update(task_cache_data)
-                    print(f"[SEARCH_CACHE] Loaded {len(task_cache_data)} entries from existing task cache {self.task_cache_file.name}")
+                    # print(f"[SEARCH_CACHE] Loaded {len(task_cache_data)} entries from existing task cache {self.task_cache_file.name}")
         except Exception as e:
             logger.warning(f"[SEARCH_CACHE] Failed to load task cache from {self.task_cache_file}: {e}")
 
@@ -151,7 +151,7 @@ class SearchCache:
             if not self.task_cache_file.exists():
                 with open(self.task_cache_file, 'w', encoding='utf-8') as f:
                     json.dump({}, f, ensure_ascii=False, indent=2)
-                logger.info(f"[SEARCH_CACHE] Initialized task cache file: {self.task_cache_file.name}")
+                # logger.info(f"[SEARCH_CACHE] Initialized task cache file: {self.task_cache_file.name}")
         except Exception as e:
             print(f"[SEARCH_CACHE] Warning: Failed to initialize task cache file: {e}")
 
@@ -290,10 +290,10 @@ class SearchCache:
             if not force:
                 self._saved = True
             entry_count = len(cache_data)
-            if entry_count > 0:
-                logger.info(f"[SEARCH_CACHE] Saved {entry_count} entries to {self.task_cache_file.name}")
-            else:
-                logger.info(f"[SEARCH_CACHE] Saved empty cache to {self.task_cache_file.name}")
+            # if entry_count > 0:
+            #     logger.info(f"[SEARCH_CACHE] Saved {entry_count} entries to {self.task_cache_file.name}")
+            # else:
+            #     logger.info(f"[SEARCH_CACHE] Saved empty cache to {self.task_cache_file.name}")
         except Exception as e:
             logger.warning(f"[SEARCH_CACHE] Failed to save cache to {self.task_cache_file}: {e}")
             # Clean up temp file if it exists
@@ -396,7 +396,7 @@ class SearchCache:
 
         cache_dir = Path(cache_dir)
         if not cache_dir.exists():
-            print("[SEARCH_CACHE] Cache directory not found")
+            # print("[SEARCH_CACHE] Cache directory not found")
             return 0
 
         # Find all task-specific cache files
@@ -409,7 +409,7 @@ class SearchCache:
         all_cache_files = task_cache_files + process_cache_files
 
         if not all_cache_files:
-            print("[SEARCH_CACHE] No task cache files found to merge")
+            # print("[SEARCH_CACHE] No task cache files found to merge")
             # Check if global cache exists, return its count
             global_cache = cache_dir / "search_cache.json"
             if global_cache.exists():
@@ -421,8 +421,8 @@ class SearchCache:
                     pass
             return 0
 
-        print(f"[SEARCH_CACHE] Found {len(all_cache_files)} cache files to merge "
-              f"({len(task_cache_files)} task files, {len(process_cache_files)} legacy process files)")
+        # print(f"[SEARCH_CACHE] Found {len(all_cache_files)} cache files to merge "
+        #       f"({len(task_cache_files)} task files, {len(process_cache_files)} legacy process files)")
 
         # Load global cache if it exists
         global_cache_file = cache_dir / "search_cache.json"
@@ -440,12 +440,12 @@ class SearchCache:
                             valid_count += 1
                         else:
                             logger.warning(f"[SEARCH_CACHE] Skipping invalid cache entry '{cache_key}': expected dict, got {type(entry).__name__}")
-                    print(f"[SEARCH_CACHE] Loaded {valid_count} valid entries from existing global cache")
+                    # print(f"[SEARCH_CACHE] Loaded {valid_count} valid entries from existing global cache")
                     if valid_count < len(loaded_cache):
                         invalid_count = len(loaded_cache) - valid_count
                         logger.warning(f"[SEARCH_CACHE] Skipped {invalid_count} invalid entries from global cache")
             except Exception as e:
-                print(f"[SEARCH_CACHE] Warning: Failed to load global cache: {e}")
+                # print(f"[SEARCH_CACHE] Warning: Failed to load global cache: {e}")
                 merged_cache = {}
 
         # Merge each cache file
@@ -457,12 +457,12 @@ class SearchCache:
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     file_cache = json.load(f)
 
-                print(f"[SEARCH_CACHE] Merging {len(file_cache)} entries from {cache_file.name}")
+                # print(f"[SEARCH_CACHE] Merging {len(file_cache)} entries from {cache_file.name}")
 
                 for cache_key, entry in file_cache.items():
                     # Skip invalid entries (not dicts)
                     if not isinstance(entry, dict):
-                        logger.warning(f"[SEARCH_CACHE] Skipping invalid entry '{cache_key}' in {cache_file.name}: expected dict, got {type(entry).__name__}")
+                        # logger.warning(f"[SEARCH_CACHE] Skipping invalid entry '{cache_key}' in {cache_file.name}: expected dict, got {type(entry).__name__}")
                         continue
 
                     if cache_key not in merged_cache:
@@ -478,7 +478,7 @@ class SearchCache:
                             total_updated_entries += 1
 
             except Exception as e:
-                print(f"[SEARCH_CACHE] Warning: Failed to process {cache_file.name}: {e}")
+                # print(f"[SEARCH_CACHE] Warning: Failed to process {cache_file.name}: {e}")
                 continue
 
         # Save merged cache to global cache file
@@ -488,7 +488,7 @@ class SearchCache:
                 backup_file = cache_dir / "search_cache.json.backup"
                 import shutil
                 shutil.copy2(global_cache_file, backup_file)
-                print(f"[SEARCH_CACHE] Backed up existing global cache to {backup_file.name}")
+                # print(f"[SEARCH_CACHE] Backed up existing global cache to {backup_file.name}")
 
             # Write merged cache
             with open(global_cache_file, 'w', encoding='utf-8') as f:
@@ -506,7 +506,7 @@ class SearchCache:
             for cache_file in all_cache_files:
                 try:
                     cache_file.unlink()
-                    print(f"[SEARCH_CACHE] Cleaned up {cache_file.name}")
+                    # print(f"[SEARCH_CACHE] Cleaned up {cache_file.name}")
                 except Exception as e:
                     print(f"[SEARCH_CACHE] Warning: Failed to delete {cache_file.name}: {e}")
         except Exception as e:
@@ -570,7 +570,7 @@ def get_search_cache(task_id: Optional[str] = None) -> SearchCache:
         if effective_task_id not in _task_caches:
             cache_path = os.getenv("MIROFLOW_SEARCH_CACHE_PATH")
             _task_caches[effective_task_id] = SearchCache(cache_path=cache_path, task_id=effective_task_id)
-            print(f"[SEARCH_CACHE] Created new cache instance for task: {effective_task_id}")
+            # print(f"[SEARCH_CACHE] Created new cache instance for task: {effective_task_id}")
         return _task_caches[effective_task_id]
 
     # Otherwise, use the global shared cache (for backward compatibility)
@@ -599,4 +599,4 @@ def cleanup_task_cache(task_id: str):
     global _task_caches
     if task_id in _task_caches:
         del _task_caches[task_id]
-        print(f"[SEARCH_CACHE] Cleaned up cache instance for task: {task_id}")
+        # print(f"[SEARCH_CACHE] Cleaned up cache instance for task: {task_id}")

@@ -369,6 +369,13 @@ class OpenAIClient(BaseClient):
                                     content_preview = str(content)[:1000] if len(str(content)) > 1000 else str(content)
                                     logger.error(f"Message {idx} [{role}]: {content_preview}")
                             logger.error("=== End Debug ===")
+                        elif "high risk" in str(e):
+                            self.task_log.log_step(
+                                "error",
+                                "LLM | API Error",
+                                "request was rejected because it was considered high risk"
+                            )
+                            raise e
                         await asyncio.sleep(base_wait_time)
                         continue
                     else:
