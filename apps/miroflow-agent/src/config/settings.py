@@ -404,6 +404,8 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
                         "OSS_ACCESS_KEY_SECRET": os.getenv("OSS_ACCESS_KEY_SECRET", ""),
                         "OSS_BUCKET_NAME": os.getenv("OSS_BUCKET_NAME", ""),
                         "OSS_ENDPOINT": os.getenv("OSS_ENDPOINT", ""),
+                        "IMAGE_MIN_PIXELS": os.getenv("IMAGE_MIN_PIXELS", ""),
+                        "IMAGE_MAX_PIXELS": os.getenv("IMAGE_MAX_PIXELS", ""),
                     },
                 ),
             }
@@ -427,6 +429,8 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
                         "OSS_ACCESS_KEY_SECRET": os.getenv("OSS_ACCESS_KEY_SECRET", ""),
                         "OSS_BUCKET_NAME": os.getenv("OSS_BUCKET_NAME", ""),
                         "OSS_ENDPOINT": os.getenv("OSS_ENDPOINT", ""),
+                        "IMAGE_MIN_PIXELS": os.getenv("IMAGE_MIN_PIXELS", ""),
+                        "IMAGE_MAX_PIXELS": os.getenv("IMAGE_MAX_PIXELS", ""),
                     },
                 ),
             }

@@ -19,6 +19,7 @@ from typing import Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
+from PIL import Image
 
 # Ensure .env file is loaded
 load_dotenv()
@@ -200,6 +201,60 @@ def generate_simple_image_caption(image_path: str, task_description: str = "") -
     # For initial input images, we provide a minimal description
     # The actual visual understanding will be done by the multi-modal model
     return f"[Original input image: {os.path.basename(image_path)}]"
+
+
+def resize_image_with_pixel_limits(
+    image: Image.Image,
+    min_pixels: int = None,
+    max_pixels: int = None,
+) -> Tuple[Image.Image, bool]:
+    """
+    Resize image to fit within pixel limits while maintaining aspect ratio.
+
+    If the image is too small (width * height < min_pixels), it will be scaled up.
+    If the image is too large (width * height > max_pixels), it will be scaled down.
+
+    Args:
+        image: PIL Image object
+        min_pixels: Minimum total pixels (width * height). If None, no minimum limit.
+        max_pixels: Maximum total pixels (width * height). If None, no maximum limit.
+
+    Returns:
+        Tuple of (resized_image, was_resized)
+        - resized_image: The resized PIL Image (or original if no resize needed)
+        - was_resized: True if image was resized, False otherwise
+    """
+    if min_pixels is None and max_pixels is None:
+        return image, False
+
+    width, height = image.size
+    current_pixels = width * height
+
+    # Check if resize is needed
+    needs_resize = False
+    target_pixels = None
+
+    if min_pixels is not None and current_pixels < min_pixels:
+        needs_resize = True
+        target_pixels = min_pixels
+    elif max_pixels is not None and current_pixels > max_pixels:
+        needs_resize = True
+        target_pixels = max_pixels
+
+    if not needs_resize or target_pixels is None:
+        return image, False
+
+    # Calculate scale factor to reach target pixels while maintaining aspect ratio
+    scale_factor = (target_pixels / current_pixels) ** 0.5
+
+    # Calculate new dimensions
+    new_width = int(width * scale_factor)
+    new_height = int(height * scale_factor)
+
+    # Resize using high-quality resampling
+    resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+
+    return resized_image, True
 
 
 def format_image_for_context(

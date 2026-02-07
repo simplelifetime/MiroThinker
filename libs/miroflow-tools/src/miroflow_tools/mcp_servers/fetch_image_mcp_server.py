@@ -9,11 +9,33 @@ the agent's context in a multi-modal format compatible with OpenAI's API.
 """
 
 import base64
+import io
 import mimetypes
+import os
 from urllib.parse import urlparse
 
 from fastmcp import FastMCP
 import requests
+from PIL import Image
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
+
+# Load environment variables for pixel limits
+# Parse environment variables - treat "0" or empty string as disabled (None)
+def parse_pixel_limit(env_value: str) -> int | None:
+    """Parse pixel limit from environment variable string."""
+    if not env_value or env_value.strip() == "" or env_value.strip() == "0":
+        return None
+    try:
+        value = int(env_value.strip())
+        return value if value > 0 else None
+    except (ValueError, AttributeError):
+        return None
+
+MIN_PIXELS = parse_pixel_limit(os.getenv("IMAGE_MIN_PIXELS", ""))
+MAX_PIXELS = parse_pixel_limit(os.getenv("IMAGE_MAX_PIXELS", ""))
 
 
 def is_valid_image(content: bytes) -> bool:
@@ -125,6 +147,60 @@ def get_mime_type_from_url(url: str) -> str:
     return mime_type
 
 
+def resize_image_with_pixel_limits(
+    image: Image.Image,
+    min_pixels: int = None,
+    max_pixels: int = None,
+) -> tuple[Image.Image, bool]:
+    """
+    Resize image to fit within pixel limits while maintaining aspect ratio.
+
+    If the image is too small (width * height < min_pixels), it will be scaled up.
+    If the image is too large (width * height > max_pixels), it will be scaled down.
+
+    Args:
+        image: PIL Image object
+        min_pixels: Minimum total pixels (width * height). If None, no minimum limit.
+        max_pixels: Maximum total pixels (width * height). If None, no maximum limit.
+
+    Returns:
+        Tuple of (resized_image, was_resized)
+        - resized_image: The resized PIL Image (or original if no resize needed)
+        - was_resized: True if image was resized, False otherwise
+    """
+    if min_pixels is None and max_pixels is None:
+        return image, False
+
+    width, height = image.size
+    current_pixels = width * height
+
+    # Check if resize is needed
+    needs_resize = False
+    target_pixels = None
+
+    if min_pixels is not None and current_pixels < min_pixels:
+        needs_resize = True
+        target_pixels = min_pixels
+    elif max_pixels is not None and current_pixels > max_pixels:
+        needs_resize = True
+        target_pixels = max_pixels
+
+    if not needs_resize or target_pixels is None:
+        return image, False
+
+    # Calculate scale factor to reach target pixels while maintaining aspect ratio
+    scale_factor = (target_pixels / current_pixels) ** 0.5
+
+    # Calculate new dimensions
+    new_width = int(width * scale_factor)
+    new_height = int(height * scale_factor)
+
+    # Resize using high-quality resampling
+    resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+
+    return resized_image, True
+
+
 def download_image_from_url(image_url: str, timeout: int = 30) -> tuple[bytes, str, str]:
     """
     Download image from URL and return bytes, MIME type, and error message.
@@ -191,6 +267,7 @@ async def fetch_image(url: str) -> str:
     """Download an image from a URL and load it into the agent's context.
 
     This tool downloads an image and converts it to base64 format for vision-capable LLMs.
+    Automatically resizes the image if it exceeds configured pixel limits.
 
     Args:
         url: The URL of the image to download. Must start with http:// or https://
@@ -201,6 +278,7 @@ async def fetch_image(url: str) -> str:
     Note:
         - Supported formats: jpg, png, gif, webp, bmp, etc.
         - Maximum timeout: 30 seconds
+        - Image will be resized if outside MIN_PIXELS and MAX_PIXELS limits (if configured)
     """
     # Download image
     image_bytes, mime_type, error_message = download_image_from_url(url)
@@ -209,14 +287,66 @@ async def fetch_image(url: str) -> str:
         # Return error message in JSON format
         return f'{{"error": "{error_message}"}}'
 
-    # Encode to base64
+    # Check if we need to resize the image based on pixel limits
     try:
+        # Load image from bytes
+        image = Image.open(io.BytesIO(image_bytes))
+
+        # Get original dimensions
+        orig_width, orig_height = image.size
+        orig_pixels = orig_width * orig_height
+
+        # Apply pixel limits if configured
+        resized_image, was_resized = resize_image_with_pixel_limits(
+            image, MIN_PIXELS, MAX_PIXELS
+        )
+
+        if was_resized:
+            new_width, new_height = resized_image.size
+            new_pixels = new_width * new_height
+
+            # Convert resized image back to bytes
+            buffer = io.BytesIO()
+            # Determine format from mime_type
+            format_map = {
+                'image/jpeg': 'JPEG',
+                'image/jpg': 'JPEG',
+                'image/png': 'PNG',
+                'image/gif': 'GIF',
+                'image/webp': 'WEBP',
+                'image/bmp': 'BMP',
+            }
+            pil_format = format_map.get(mime_type, 'JPEG')
+
+            resized_image.save(buffer, format=pil_format)
+            image_bytes = buffer.getvalue()
+
+            # Update mime_type if needed (JPEG is safest for resizing)
+            if pil_format == 'JPEG':
+                mime_type = 'image/jpeg'
+
+        # Encode to base64
         base64_data = base64.b64encode(image_bytes).decode('utf-8')
+
     except Exception as e:
-        return f'{{"error": "Failed to encode image to base64: {str(e)}"}}'
+        # If image processing fails, try to encode the original bytes
+        try:
+            base64_data = base64.b64encode(image_bytes).decode('utf-8')
+            was_resized = False
+            orig_width, orig_height = 0, 0
+            orig_pixels = 0
+        except Exception as e2:
+            return f'{{"error": "Failed to process image: {str(e2)}"}}'
 
     # Create data URL
     data_url = f"data:{mime_type};base64,{base64_data}"
+
+    # Build description text
+    if was_resized:
+        description = (f"Image downloaded from: {url} (resized from {orig_width}x{orig_height} "
+                      f"({orig_pixels} pixels) to {new_width}x{new_height} ({new_pixels} pixels))")
+    else:
+        description = f"Image downloaded from: {url}"
 
     # Return multi-modal format as JSON string
     # This format is compatible with OpenAI's multi-modal input
@@ -224,7 +354,7 @@ async def fetch_image(url: str) -> str:
     result = [
         {
             "type": "text",
-            "text": f"Image downloaded from: {url}"
+            "text": description
         },
         {
             "type": "image_url",

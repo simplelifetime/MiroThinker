@@ -41,6 +41,21 @@ mcp = FastMCP("image-processing-server")
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
 SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
+# Load environment variables for pixel limits
+# Parse environment variables - treat "0" or empty string as disabled (None)
+def parse_pixel_limit(env_value: str) -> int | None:
+    """Parse pixel limit from environment variable string."""
+    if not env_value or env_value.strip() == "" or env_value.strip() == "0":
+        return None
+    try:
+        value = int(env_value.strip())
+        return value if value > 0 else None
+    except (ValueError, AttributeError):
+        return None
+
+MIN_PIXELS = parse_pixel_limit(os.getenv("IMAGE_MIN_PIXELS", ""))
+MAX_PIXELS = parse_pixel_limit(os.getenv("IMAGE_MAX_PIXELS", ""))
+
 
 class OSSUploader:
     """Handler for uploading images to Aliyun OSS."""
@@ -247,6 +262,110 @@ def encode_image_to_base64(image: Image.Image, format: str = "PNG") -> str:
     return f"data:{mime_type};base64,{base64_str}"
 
 
+def resize_image_with_pixel_limits(
+    image: Image.Image,
+    min_pixels: int = None,
+    max_pixels: int = None,
+) -> Tuple[Image.Image, bool, tuple]:
+    """
+    Resize image to fit within pixel limits while maintaining aspect ratio.
+
+    If the image is too small (width * height < min_pixels), it will be scaled up.
+    If the image is too large (width * height > max_pixels), it will be scaled down.
+
+    Args:
+        image: PIL Image object
+        min_pixels: Minimum total pixels (width * height). If None, no minimum limit.
+        max_pixels: Maximum total pixels (width * height). If None, no maximum limit.
+
+    Returns:
+        Tuple of (resized_image, was_resized, (orig_width, orig_height, new_width, new_height))
+        - resized_image: The resized PIL Image (or original if no resize needed)
+        - was_resized: True if image was resized, False otherwise
+        - dimensions: Tuple of (orig_width, orig_height, new_width, new_height)
+    """
+    if min_pixels is None and max_pixels is None:
+        return image, False, (0, 0, 0, 0)
+
+    orig_width, orig_height = image.size
+    current_pixels = orig_width * orig_height
+
+    # Check if resize is needed
+    needs_resize = False
+    target_pixels = None
+
+    if min_pixels is not None and current_pixels < min_pixels:
+        needs_resize = True
+        target_pixels = min_pixels
+    elif max_pixels is not None and current_pixels > max_pixels:
+        needs_resize = True
+        target_pixels = max_pixels
+
+    if not needs_resize or target_pixels is None:
+        return image, False, (0, 0, 0, 0)
+
+    # Calculate scale factor to reach target pixels while maintaining aspect ratio
+    scale_factor = (target_pixels / current_pixels) ** 0.5
+
+    # Calculate new dimensions
+    new_width = int(orig_width * scale_factor)
+    new_height = int(orig_height * scale_factor)
+
+    # Resize using high-quality resampling
+    resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+
+    return resized_image, True, (orig_width, orig_height, new_width, new_height)
+
+
+def process_and_encode_image(
+    image: Image.Image,
+    output_format: str = "PNG",
+    description: str = "",
+) -> Tuple[str, str]:
+    """
+    Process image: resize if needed, encode to base64, and generate description.
+
+    Args:
+        image: PIL Image object
+        output_format: Output format ('PNG', 'JPEG', etc.)
+        description: Base description of the image
+
+    Returns:
+        Tuple of (base64_with_mime, full_description)
+    """
+    # Apply pixel limits if configured
+    resized_image, was_resized, dimensions = resize_image_with_pixel_limits(
+        image, MIN_PIXELS, MAX_PIXELS
+    )
+
+    # Use the resized image if it was resized, otherwise use original
+    final_image = resized_image if was_resized else image
+
+    # Convert to bytes
+    buffer = io.BytesIO()
+    final_image.save(buffer, format=output_format)
+    image_bytes = buffer.getvalue()
+
+    # Encode to base64
+    base64_str = base64.b64encode(image_bytes).decode("utf-8")
+    mime_type = f"image/{output_format.lower()}"
+    base64_with_mime = f"data:{mime_type};base64,{base64_str}"
+
+    # Build full description
+    if was_resized:
+        orig_width, orig_height, new_width, new_height = dimensions
+        orig_pixels = orig_width * orig_height
+        new_pixels = new_width * new_height
+        full_description = (
+            f"{description} (resized from {orig_width}x{orig_height} "
+            f"({orig_pixels} pixels) to {new_width}x{new_height} ({new_pixels} pixels))"
+        )
+    else:
+        full_description = description
+
+    return base64_with_mime, full_description
+
+
 def load_image_from_url(image_url: str) -> Tuple[Optional[Image.Image], Optional[str]]:
     """
     Load an image from URL.
@@ -321,17 +440,17 @@ async def zoom_in(
         oss_uploader = OSSUploader()
         oss_url = oss_uploader.upload_bytes(image_bytes)
 
-        # Encode to base64 for return
-        base64_str = base64.b64encode(image_bytes).decode("utf-8")
-        mime_type = f"image/{output_format.lower()}"
-        base64_with_mime = f"data:{mime_type};base64,{base64_str}"
-
-        # Generate description
+        # Generate base description
         description = f"[Zoomed region: ({x}, {y}, {width}, {height}) from original image]"
+
+        # Process and encode image (includes resize if needed)
+        base64_with_mime, full_description = process_and_encode_image(
+            cropped, output_format, description
+        )
 
         # Format for multi-modal context
         image_content, text_description = format_image_for_context(
-            base64_with_mime, oss_url, description
+            base64_with_mime, oss_url, full_description
         )
 
         # Return multi-modal format as JSON string (similar to fetch_image)
@@ -386,18 +505,18 @@ async def rotate(
         oss_uploader = OSSUploader()
         oss_url = oss_uploader.upload_bytes(image_bytes)
 
-        # Encode to base64 for return
-        base64_str = base64.b64encode(image_bytes).decode("utf-8")
-        mime_type = f"image/{output_format.lower()}"
-        base64_with_mime = f"data:{mime_type};base64,{base64_str}"
-
-        # Generate description
+        # Generate base description
         expand_info = "expanded" if expand else "original size"
         description = f"[Rotated image: {angle} degrees, {expand_info}]"
 
+        # Process and encode image (includes resize if needed)
+        base64_with_mime, full_description = process_and_encode_image(
+            rotated, output_format, description
+        )
+
         # Format for multi-modal context
         image_content, text_description = format_image_for_context(
-            base64_with_mime, oss_url, description
+            base64_with_mime, oss_url, full_description
         )
 
         original_size = image.size
@@ -463,17 +582,17 @@ async def flip(
         oss_uploader = OSSUploader()
         oss_url = oss_uploader.upload_bytes(image_bytes)
 
-        # Encode to base64 for return
-        base64_str = base64.b64encode(image_bytes).decode("utf-8")
-        mime_type = f"image/{output_format.lower()}"
-        base64_with_mime = f"data:{mime_type};base64,{base64_str}"
-
-        # Generate description
+        # Generate base description
         description = f"[Flipped image: {direction_str}]"
+
+        # Process and encode image (includes resize if needed)
+        base64_with_mime, full_description = process_and_encode_image(
+            flipped, output_format, description
+        )
 
         # Format for multi-modal context
         image_content, text_description = format_image_for_context(
-            base64_with_mime, oss_url, description
+            base64_with_mime, oss_url, full_description
         )
 
         # Return multi-modal format as JSON string (similar to fetch_image)
@@ -572,18 +691,18 @@ async def put_box(
         oss_uploader = OSSUploader()
         oss_url = oss_uploader.upload_bytes(image_bytes)
 
-        # Encode to base64 for return
-        base64_str = base64.b64encode(image_bytes).decode("utf-8")
-        mime_type = f"image/{output_format.lower()}"
-        base64_with_mime = f"data:{mime_type};base64,{base64_str}"
-
-        # Generate description
+        # Generate base description
         label_info = f" with label '{label}'" if label else ""
         description = f"[Annotated image: bounding box ({x1},{y1}) to ({x2},{y2}){label_info}, color: {color}]"
 
+        # Process and encode image (includes resize if needed)
+        base64_with_mime, full_description = process_and_encode_image(
+            annotated, output_format, description
+        )
+
         # Format for multi-modal context
         image_content, text_description = format_image_for_context(
-            base64_with_mime, oss_url, description
+            base64_with_mime, oss_url, full_description
         )
 
         # Return multi-modal format as JSON string (similar to fetch_image)
