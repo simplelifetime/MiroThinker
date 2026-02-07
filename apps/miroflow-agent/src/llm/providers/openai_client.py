@@ -160,7 +160,8 @@ class OpenAIClient(BaseClient):
 
         # Retry loop with dynamic max_tokens adjustment
         max_retries = 100
-        base_wait_time = 30
+        base_wait_time = 2
+        max_length_limit_retries = 3
         current_max_tokens = self.max_tokens
 
         # Convert MCP tool definitions to OpenAI function calling format if enabled
@@ -225,9 +226,9 @@ class OpenAIClient(BaseClient):
                 finish_reason = getattr(response.choices[0], "finish_reason", None)
                 if finish_reason == "length":
                     # If this is not the last retry, increase max_tokens and retry
-                    if attempt < max_retries - 1:
+                    if attempt < max_length_limit_retries - 1:
                         # Increase max_tokens by 10%
-                        current_max_tokens = int(current_max_tokens * 1.1)
+                        current_max_tokens = int(current_max_tokens * 1.2)
                         self.task_log.log_step(
                             "warning",
                             "LLM | Length Limit Reached",
