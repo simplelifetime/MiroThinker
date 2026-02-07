@@ -314,8 +314,9 @@ class OutputFormatter:
         if boxed_result:
             summary_lines.append(boxed_result)
         elif final_answer_text:
-            summary_lines.append("No \\boxed{} content found.")
-            boxed_result = FORMAT_ERROR_MESSAGE
+            summary_lines.append("No \\boxed{} content found. Use the entire answer text as the result.")
+            # boxed_result = FORMAT_ERROR_MESSAGE
+            boxed_result = final_answer_text
 
         # Token usage statistics and cost estimation - use client method
         if client and hasattr(client, "format_token_usage_summary"):
