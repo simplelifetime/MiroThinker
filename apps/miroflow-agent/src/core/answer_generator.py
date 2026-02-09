@@ -32,7 +32,7 @@ from .stream_handler import StreamHandler
 logger = logging.getLogger(__name__)
 
 # Safety limits for retry loops
-DEFAULT_MAX_FINAL_ANSWER_RETRIES = 3
+DEFAULT_MAX_FINAL_ANSWER_RETRIES = 20
 
 
 class AnswerGenerator:
