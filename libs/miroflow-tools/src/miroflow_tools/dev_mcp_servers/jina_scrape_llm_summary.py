@@ -663,8 +663,8 @@ async def extract_info_with_llm(
         headers["Authorization"] = f"Bearer {SUMMARY_LLM_API_KEY}"
 
     try:
-        # Retry configuration
-        connect_retry_delays = [1, 2, 4, 8]
+        # Retry configuration (delays in seconds between attempts)
+        connect_retry_delays = [1, 2, 4, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 
         for attempt, delay in enumerate(connect_retry_delays, 1):
             try:
