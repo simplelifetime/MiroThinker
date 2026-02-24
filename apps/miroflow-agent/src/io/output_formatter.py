@@ -3,11 +3,17 @@
 
 """Output formatting utilities for agent responses."""
 
+import base64
 import json
+import logging
 import re
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
+
+import requests
 
 from ..utils.prompt_utils import FORMAT_ERROR_MESSAGE
+
+logger = logging.getLogger(__name__)
 
 # Maximum length for tool results before truncation (100k chars ≈ 25k tokens)
 TOOL_RESULT_MAX_LENGTH = 100_000
@@ -93,6 +99,31 @@ class OutputFormatter:
         black_list = ["?", "??", "???", "？", "……", "…", "...", "unknown", None]
         return last_result.strip() if last_result not in black_list else ""
 
+    def _download_thumbnail(self, url: str, timeout: int = 10) -> Optional[str]:
+        """
+        Download a thumbnail image and return it as a base64 data URL.
+
+        Args:
+            url: The thumbnail image URL to download.
+            timeout: Request timeout in seconds.
+
+        Returns:
+            Base64 data URL string, or None if download fails.
+        """
+        if not url:
+            return None
+        try:
+            response = requests.get(url, timeout=timeout, stream=True)
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "image/jpeg")
+            if "image" not in content_type:
+                content_type = "image/jpeg"
+            image_base64 = base64.b64encode(response.content).decode("utf-8")
+            return f"data:{content_type};base64,{image_base64}"
+        except Exception as e:
+            logger.warning(f"Failed to download thumbnail from {url}: {e}")
+            return None
+
     def format_tool_result_for_user(
         self, tool_call_execution_result: dict
     ) -> Union[dict, list]:
@@ -151,17 +182,17 @@ class OutputFormatter:
                     # If parsing fails, treat as regular text
                     pass
 
-            # Check if this is an image search result with base64 data
+            # Check if this is an image search or visual search result
             if tool_name in ["image_search", "visual_search"]:
                 try:
-                    # Try to parse as JSON
                     if isinstance(result, str):
                         data = json.loads(result)
                     else:
                         data = result
 
-                    # Check if this contains images with base64 data
-                    if "images" in data and isinstance(data["images"], list):
+                    has_images = "images" in data and isinstance(data["images"], list)
+                    has_organic = "organic" in data and isinstance(data["organic"], list)
+                    if has_images or has_organic:
                         return self._format_image_search_result(
                             data, tool_name, server_name
                         )
@@ -207,13 +238,16 @@ class OutputFormatter:
         self, data: dict, tool_name: str, server_name: str
     ) -> list:
         """
-        Format image search results as multi-modal content.
+        Format image/visual search results as multi-modal content with thumbnails.
 
-        Creates a list with text description and base64-encoded images
-        for direct visual processing by multi-modal models.
+        For each result item, downloads the thumbnail image from thumbnailUrl
+        and places it immediately after the item's text description, enabling
+        the model to visually inspect search results.
+
+        Handles both image_search ("images" array) and visual_search ("organic" array).
 
         Args:
-            data: Parsed JSON response from image search
+            data: Parsed JSON response from image/visual search
             tool_name: Name of the tool that was called
             server_name: Name of the MCP server
 
@@ -221,21 +255,25 @@ class OutputFormatter:
             List of content items (text + images) in OpenAI API format
         """
         content_items = []
-        images = data.get("images", [])
 
-        # Add text summary
+        images = data.get("images", [])
+        organic = data.get("organic", [])
+        items = images if images else organic
+
         search_type = (
             "Visual search" if tool_name == "visual_search" else "Image search"
         )
-        text_summary = f"{search_type} completed on {server_name}. Found {len(images)} images.\n\n"
+        header = f"{search_type} completed on {server_name}. Found {len(items)} results.\n"
+        content_items.append({"type": "text", "text": header})
 
-        # Add text descriptions for images (limited to avoid context explosion)
-        for idx, img in enumerate(images[:10]):  # Limit text descriptions to 10
-            title = img.get("title", "")
-            link = img.get("link", "")
-            image_url = img.get("imageUrl", "")
+        max_items = min(len(items), 5)
+        for idx, item in enumerate(items[:max_items]):
+            title = item.get("title", "")
+            link = item.get("link", "")
+            image_url = item.get("imageUrl", "")
+            thumbnail_url = item.get("thumbnailUrl", "")
 
-            parts = [f"{idx + 1}. "]
+            parts = [f"{idx + 1}."]
             if title:
                 parts.append(f"Title: {title}")
             if image_url:
@@ -243,48 +281,34 @@ class OutputFormatter:
             if link:
                 parts.append(f"Source: {link}")
 
-            text_summary += " | ".join(parts) + "\n"
+            text_desc = " | ".join(parts)
+            content_items.append({"type": "text", "text": text_desc})
 
-        if len(images) > 10:
-            text_summary += f"\n... and {len(images) - 10} more images.\n"
-
-        # Add note about which images have base64 data
-        base64_count = sum(1 for img in images if "base64_data" in img)
-        if base64_count > 0:
-            text_summary += (
-                f"\nNote: The first {base64_count} images are included below "
-                "for direct visual analysis."
-            )
-
-        content_items.append({"type": "text", "text": text_summary})
-
-        # Add base64 images (first 5)
-        for idx, img in enumerate(images[:5]):
-            if "base64_data" in img:
-                # Create image content with metadata description
-                image_url = img.get("imageUrl", "N/A")
-                title = img.get("title", "")
-                link = img.get("link", "")
-
-                # Build text description
-                desc_parts = [f"Image {idx + 1}"]
-                if image_url and image_url != "N/A":
-                    desc_parts.append(f"Image URL: {image_url}")
-                if title:
-                    desc_parts.append(f"Title: {title}")
-                if link:
-                    desc_parts.append(f"Webpage URL: {link}")
-
-                text_description = ", ".join(desc_parts)
-
-                # Add image with text description
+            if thumbnail_url:
+                base64_data = self._download_thumbnail(thumbnail_url)
+                if base64_data:
+                    content_items.append({"type": "text", "text": "Thumbnail: "})
+                    content_items.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": base64_data},
+                        }
+                    )
+            elif "base64_data" in item:
                 content_items.append(
                     {
                         "type": "image_url",
-                        "image_url": {"url": img["base64_data"]},
+                        "image_url": {"url": item["base64_data"]},
                     }
                 )
-                content_items.append({"type": "text", "text": text_description})
+
+        if len(items) > max_items:
+            content_items.append(
+                {
+                    "type": "text",
+                    "text": f"\n... and {len(items) - max_items} more results.",
+                }
+            )
 
         return content_items
 
