@@ -167,19 +167,6 @@ async def scrape_url_with_jina(
             "all_content_displayed": False,
         }
 
-    # Get API key from environment
-    if not JINA_API_KEY:
-        return {
-            "success": False,
-            "filename": "",
-            "content": "",
-            "error": "JINA_API_KEY environment variable is not set",
-            "line_count": 0,
-            "char_count": 0,
-            "last_char_line": 0,
-            "all_content_displayed": False,
-        }
-
     # Avoid duplicate Jina URL prefix
     if url.startswith("https://r.jina.ai/") and url.count("http") >= 2:
         url = url[len("https://r.jina.ai/") :]
@@ -188,10 +175,8 @@ async def scrape_url_with_jina(
     jina_url = f"{JINA_BASE_URL}/{url}"
 
     try:
-        # Prepare headers
-        headers = {
-            "Authorization": f"Bearer {JINA_API_KEY}",
-        }
+        # Start without API key to save costs; key is added on retry if available
+        headers = {}
 
         # Add custom headers if provided
         if custom_headers:
@@ -201,6 +186,12 @@ async def scrape_url_with_jina(
         retry_delays = [1, 2, 4, 8]
 
         for attempt, delay in enumerate(retry_delays, 1):
+            if attempt > 1 and JINA_API_KEY and "Authorization" not in headers:
+                logger.info(
+                    "Jina Scrape: Adding API key for retry attempts"
+                )
+                headers["Authorization"] = f"Bearer {JINA_API_KEY}"
+
             try:
                 # Make the request using httpx library
                 async with httpx.AsyncClient() as client:

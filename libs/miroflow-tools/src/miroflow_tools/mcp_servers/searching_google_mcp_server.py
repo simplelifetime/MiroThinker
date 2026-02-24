@@ -977,18 +977,20 @@ async def scrape_website(url: str) -> str:
     if "huggingface.co/datasets" in url or "huggingface.co/spaces" in url:
         return "You are trying to scrape a Hugging Face dataset for answers, please do not use the scrape tool for this purpose."
 
-    if JINA_API_KEY == "":
-        return "JINA_API_KEY is not set, scrape_website tool is not available."
-
     try:
         # Use Jina.ai reader API to convert URL to LLM-friendly text
         jina_url = f"{JINA_BASE_URL}/{url}"
 
-        # Make request with proper headers
-        headers = {"Authorization": f"Bearer {JINA_API_KEY}"}
-
-        response = requests.get(jina_url, headers=headers, timeout=60)
-        response.raise_for_status()
+        # Try without API key first to save costs
+        try:
+            response = requests.get(jina_url, timeout=60)
+            response.raise_for_status()
+        except Exception:
+            if not JINA_API_KEY:
+                raise
+            headers = {"Authorization": f"Bearer {JINA_API_KEY}"}
+            response = requests.get(jina_url, headers=headers, timeout=60)
+            response.raise_for_status()
 
         # Get the content
         content = response.text.strip()
