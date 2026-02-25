@@ -227,7 +227,7 @@ if __name__ == "__main__":
     sharegpt_files = [f for f in os.listdir(success_log_dir) if f.endswith(".json") and not f.endswith("_images.json")]
 
     # Determine number of worker processes (use CPU count, but cap at 16 for safety)
-    num_workers = min(cpu_count(), 32)
+    num_workers = min(cpu_count(), 64)
     print(f"  Using {num_workers} parallel workers for {len(sharegpt_files)} files...")
 
     def convert_single_file(json_file):

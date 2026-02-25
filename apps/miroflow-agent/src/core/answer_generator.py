@@ -279,7 +279,7 @@ class AnswerGenerator:
             agent_type="main",
         )
 
-        if message_history[-1]["role"] == "user":
+        if message_history[-1]["role"] == "user" or message_history[-1]["role"] == "tool":
             message_history.pop(-1)
         message_history.append({"role": "user", "content": summary_prompt})
 
