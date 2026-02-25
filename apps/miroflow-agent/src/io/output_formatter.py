@@ -99,30 +99,46 @@ class OutputFormatter:
         black_list = ["?", "??", "???", "？", "……", "…", "...", "unknown", None]
         return last_result.strip() if last_result not in black_list else ""
 
-    def _download_thumbnail(self, url: str, timeout: int = 10) -> Optional[str]:
+    _THUMBNAIL_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/",
+    }
+
+    def _download_thumbnail(self, url: str, timeout: int = 10, max_retries: int = 2) -> Optional[str]:
         """
         Download a thumbnail image and return it as a base64 data URL.
 
         Args:
             url: The thumbnail image URL to download.
             timeout: Request timeout in seconds.
+            max_retries: Maximum number of retry attempts on failure.
 
         Returns:
             Base64 data URL string, or None if download fails.
         """
         if not url:
             return None
-        try:
-            response = requests.get(url, timeout=timeout, stream=True)
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "image/jpeg")
-            if "image" not in content_type:
-                content_type = "image/jpeg"
-            image_base64 = base64.b64encode(response.content).decode("utf-8")
-            return f"data:{content_type};base64,{image_base64}"
-        except Exception as e:
-            logger.warning(f"Failed to download thumbnail from {url}: {e}")
-            return None
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    url, timeout=timeout, headers=self._THUMBNAIL_HEADERS
+                )
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "image/jpeg")
+                if "image" not in content_type:
+                    content_type = "image/jpeg"
+                image_base64 = base64.b64encode(response.content).decode("utf-8")
+                return f"data:{content_type};base64,{image_base64}"
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.warning(f"Failed to download thumbnail from {url}: {e}")
+        return None
 
     def format_tool_result_for_user(
         self, tool_call_execution_result: dict
@@ -266,8 +282,10 @@ class OutputFormatter:
         header = f"{search_type} completed on {server_name}. Found {len(items)} results.\n"
         content_items.append({"type": "text", "text": header})
 
-        max_items = min(len(items), 5)
-        for idx, item in enumerate(items[:max_items]):
+        max_thumbnails = 5
+        thumbnails_loaded = 0
+
+        for idx, item in enumerate(items):
             title = item.get("title", "")
             link = item.get("link", "")
             image_url = item.get("imageUrl", "")
@@ -281,12 +299,13 @@ class OutputFormatter:
             if link:
                 parts.append(f"Source: {link}")
 
-            text_desc = " | ".join(parts)
-            content_items.append({"type": "text", "text": text_desc})
+            still_need_thumbnails = thumbnails_loaded < max_thumbnails
 
-            if thumbnail_url:
+            if still_need_thumbnails and thumbnail_url:
                 base64_data = self._download_thumbnail(thumbnail_url)
                 if base64_data:
+                    text_desc = " | ".join(parts)
+                    content_items.append({"type": "text", "text": text_desc})
                     content_items.append({"type": "text", "text": "Thumbnail: "})
                     content_items.append(
                         {
@@ -294,21 +313,25 @@ class OutputFormatter:
                             "image_url": {"url": base64_data},
                         }
                     )
-            elif "base64_data" in item:
-                content_items.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": item["base64_data"]},
-                    }
-                )
+                    thumbnails_loaded += 1
+                    continue
+                elif "base64_data" in item:
+                    text_desc = " | ".join(parts)
+                    content_items.append({"type": "text", "text": text_desc})
+                    content_items.append({"type": "text", "text": "Thumbnail: "})
+                    content_items.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": item["base64_data"]},
+                        }
+                    )
+                    thumbnails_loaded += 1
+                    continue
 
-        if len(items) > max_items:
-            content_items.append(
-                {
-                    "type": "text",
-                    "text": f"\n... and {len(items) - max_items} more results.",
-                }
-            )
+            if thumbnail_url:
+                parts.append(f"Thumbnail URL: {thumbnail_url}")
+            text_desc = " | ".join(parts)
+            content_items.append({"type": "text", "text": text_desc})
 
         return content_items
 
