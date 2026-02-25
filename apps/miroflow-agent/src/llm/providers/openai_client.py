@@ -783,7 +783,7 @@ class OpenAIClient(BaseClient):
 
         # Calculate token count for the last user message in message_history
         last_user_tokens = 0
-        if message_history[-1]["role"] == "user":
+        if message_history[-1]["role"] in ("user", "tool"):
             content = message_history[-1]["content"]
             if isinstance(content, list):
                 for item in content:
@@ -831,7 +831,7 @@ class OpenAIClient(BaseClient):
                 system_prompt = main_agent_msg.get('system_prompt', '')
             
             # Reconstruct the message history from last call (remove the last user message which is tool result)
-            last_call_message_history = message_history[:-1] if message_history and message_history[-1]["role"] == "user" else message_history
+            last_call_message_history = message_history[:-1] if message_history and message_history[-1]["role"] in ("user", "tool") else message_history
             
             # Build the full prompt that was sent in the last call
             if system_prompt and last_call_message_history:
@@ -863,8 +863,8 @@ class OpenAIClient(BaseClient):
                 "Context limit reached, proceeding to step back and summarize the conversation",
             )
 
-            # Remove the last user message (tool call results)
-            if message_history[-1]["role"] == "user":
+            # Remove the last user/tool message (tool call results)
+            if message_history[-1]["role"] in ("user", "tool"):
                 message_history.pop()
 
             # Remove the second-to-last assistant message (tool call request)

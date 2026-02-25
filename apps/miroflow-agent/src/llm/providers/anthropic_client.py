@@ -305,7 +305,7 @@ class AnthropicClient(BaseClient):
 
         # Calculate token count for the last user message in message_history
         last_user_tokens = 0
-        if message_history[-1]["role"] == "user":
+        if message_history[-1]["role"] in ("user", "tool"):
             content = message_history[-1]["content"]
             last_user_tokens = int(self._estimate_tokens(str(content)) * buffer_factor)
 
@@ -326,8 +326,8 @@ class AnthropicClient(BaseClient):
                 "Context limit reached, proceeding to step back and summarize the conversation",
             )
 
-            # Remove the last user message (tool call results)
-            if message_history[-1]["role"] == "user":
+            # Remove the last user/tool message (tool call results)
+            if message_history[-1]["role"] in ("user", "tool"):
                 message_history.pop()
 
             # Remove the second-to-last assistant message (tool call request)
