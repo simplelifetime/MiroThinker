@@ -322,9 +322,6 @@ if __name__ == "__main__":
             images = []
             if "images" in data.keys() and data["images"]:
                 for image_path in data['images']:
-                    # Handle both hdfs and local paths
-                    image_path = image_path.replace("hdfs", "bn/ic-vlm/personal")
-
                     try:
                         with open(image_path, "rb") as f:
                             image_bytes = f.read()
@@ -346,12 +343,18 @@ if __name__ == "__main__":
             processed = process_sample((data, idx))
             processed_data.append(processed)
 
-        # Create DataFrame
-        df = pd.DataFrame(processed_data)
-
         # Save as parquet
         parquet_file = os.path.join(success_sharegpt_log_dir, "merged.parquet")
-        df.to_parquet(parquet_file, index=False)
+        data_table = pa.Table.from_pylist(processed_data)
+        pq.write_table(
+            data_table,
+            parquet_file,
+            row_group_size=1000,
+            compression="NONE",
+            use_dictionary=False,
+            write_batch_size=1,
+            write_page_index=True,
+        )
 
         samples_with_images = sum(1 for d in processed_data if d['images'])
         print(f"  ✓ Generated parquet file")
