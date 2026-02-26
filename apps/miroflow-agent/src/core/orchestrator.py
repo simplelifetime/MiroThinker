@@ -174,6 +174,7 @@ class Orchestrator:
         self.task_log.main_agent_message_history = {
             "system_prompt": system_prompt,
             "message_history": message_history,
+            "tool_definitions": self._current_tool_definitions,
         }
         self.task_log.save()
 
@@ -721,7 +722,11 @@ class Orchestrator:
         # Save session history
         self.task_log.sub_agent_message_history_sessions[
             self.task_log.current_sub_agent_session_id
-        ] = {"system_prompt": system_prompt, "message_history": message_history}
+        ] = {
+            "system_prompt": system_prompt,
+            "message_history": message_history,
+            "tool_definitions": tool_definitions,
+        }
 
         self.task_log.save()
         self.task_log.end_sub_agent_session(sub_agent_name)
@@ -790,6 +795,9 @@ class Orchestrator:
                 "Main Agent | Tool Definitions",
                 "Warning: No tool definitions found. LLM cannot use any tools.",
             )
+
+        # Store tool_definitions for use in _save_message_history callback
+        self._current_tool_definitions = tool_definitions
 
         # Generate system prompt
         system_prompt = self.llm_client.generate_agent_system_prompt(
@@ -1114,6 +1122,7 @@ class Orchestrator:
             self.task_log.main_agent_message_history = {
                 "system_prompt": system_prompt,
                 "message_history": message_history,
+                "tool_definitions": tool_definitions,
             }
             self.task_log.save()
 
@@ -1132,6 +1141,7 @@ class Orchestrator:
             self.task_log.main_agent_message_history = {
                 "system_prompt": system_prompt,
                 "message_history": message_history,
+                "tool_definitions": tool_definitions,
             }
             self.task_log.save()
 

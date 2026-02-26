@@ -185,6 +185,102 @@ def process_content_with_images(
     return processed_content, image_paths
 
 
+def rebuild_mcp_system_prompt(system_prompt: str, tool_definitions: List[Dict[str, Any]]) -> str:
+    """
+    Rebuild system prompt with MCP tool definitions when they are missing.
+
+    When use_tool_calls=True (OpenAI native function calling), the system prompt
+    saved in task logs doesn't contain tool definitions because they were passed
+    via the API `tools` parameter. This function injects the tool definitions
+    back into the system prompt in MCP XML format so the training data is complete.
+
+    Args:
+        system_prompt: The original system prompt (possibly without tool definitions)
+        tool_definitions: List of MCP server definitions with their tools
+
+    Returns:
+        System prompt with tool definitions injected
+    """
+    if not tool_definitions:
+        return system_prompt
+
+    # Check if tool definitions are already present
+    if "## Server name:" in system_prompt:
+        return system_prompt
+
+    # Build tool definitions section
+    tools_section = ""
+    for server in tool_definitions:
+        server_name = server.get("name", "")
+        if not server_name:
+            continue
+        tools_section += f"\n## Server name: {server_name}\n"
+
+        tools = server.get("tools", [])
+        for tool in tools:
+            if "error" in tool and "name" not in tool:
+                continue
+            tools_section += f"### Tool name: {tool.get('name', '')}\n"
+            tools_section += f"Description: {tool.get('description', '')}\n"
+            tools_section += f"Input JSON schema: {tool.get('schema', {})}\n"
+
+    if not tools_section:
+        return system_prompt
+
+    # Build the MCP tool-use formatting instructions
+    mcp_instructions = """# Tool-Use Formatting Instructions 
+
+Tool-use is formatted using XML-style tags. The tool-use is enclosed in <use_mcp_tool></use_mcp_tool> and each parameter is similarly enclosed within its own set of tags.
+
+The Model Context Protocol (MCP) connects to servers that provide additional tools and resources to extend your capabilities. You can use the server's tools via the `use_mcp_tool`.
+
+Description: 
+Request to use a tool provided by a MCP server. Each MCP server can provide multiple tools with different capabilities. Tools have defined input schemas that specify required and optional parameters.
+
+Parameters:
+- server_name: (required) The name of the MCP server providing the tool
+- tool_name: (required) The name of the tool to execute
+- arguments: (required) A JSON object containing the tool's input parameters, following the tool's input schema, quotes within string must be properly escaped, ensure it's valid JSON
+
+Usage:
+<use_mcp_tool>
+<server_name>server name here</server_name>
+<tool_name>tool name here</tool_name>
+<arguments>
+{{
+"param1": "value1",
+"param2": "value2 \\"escaped string\\""
+}}
+</arguments>
+</use_mcp_tool>
+
+Important Notes:
+- Tool-use must be placed **at the end** of your response, **top-level**, and not nested within other tags.
+- Always adhere to this format for the tool use to ensure proper parsing and execution.
+
+String and scalar parameters should be specified as is, while lists and objects should use JSON format. Note that spaces for string values are not stripped. The output is not expected to be valid XML and is parsed with regular expressions.
+Here are the functions available in JSONSchema format:
+
+"""
+
+    # Inject MCP instructions + tool definitions before "# General Objective"
+    anchor = "# General Objective"
+    if anchor in system_prompt:
+        insert_pos = system_prompt.index(anchor)
+        system_prompt = (
+            system_prompt[:insert_pos]
+            + mcp_instructions
+            + tools_section
+            + "\n"
+            + system_prompt[insert_pos:]
+        )
+    else:
+        # Fallback: append at the end
+        system_prompt += "\n" + mcp_instructions + tools_section
+
+    return system_prompt
+
+
 def convert_tool_calls_to_mcp_format(tool_calls: List[Dict[str, Any]]) -> str:
     """
     Convert OpenAI-style tool_calls to MCP format string.
@@ -349,6 +445,7 @@ def extract_and_save_sharegpt(
     output_dir: Path,
     input_filename: str,
     original_log_path: str = None,
+    fallback_tool_definitions: List[Dict[str, Any]] = None,
 ):
     """
     Extract message history from log data and save as ShareGPT format.
@@ -358,6 +455,8 @@ def extract_and_save_sharegpt(
         output_dir: Output directory for ShareGPT JSON files
         input_filename: Input filename (without extension)
         original_log_path: Path to original log file (for loading existing images)
+        fallback_tool_definitions: External tool definitions to use when the log file
+            doesn't contain them (for old data collected with use_tool_calls=True)
     """
     # Try to find and use existing images directory
     existing_images = []
@@ -400,6 +499,17 @@ def extract_and_save_sharegpt(
 
         # Prepend system_prompt if it exists
         system_prompt = main_agent_history.get("system_prompt", "")
+        tool_definitions = main_agent_history.get("tool_definitions", [])
+
+        # Use fallback tool_definitions for old data that doesn't have them saved
+        if not tool_definitions and fallback_tool_definitions:
+            tool_definitions = fallback_tool_definitions
+
+        # If tool_definitions are available, rebuild the full MCP system prompt
+        # so training data includes tool definitions
+        if system_prompt and tool_definitions:
+            system_prompt = rebuild_mcp_system_prompt(system_prompt, tool_definitions)
+
         if system_prompt and main_messages:
             # Create a new messages list with system prompt first
             main_messages_with_system = [
@@ -428,6 +538,17 @@ def extract_and_save_sharegpt(
             if "message_history" in session_data:
                 sub_messages = session_data["message_history"]
                 if sub_messages:
+                    # Rebuild sub-agent system prompt with tool definitions if needed
+                    sub_system_prompt = session_data.get("system_prompt", "")
+                    sub_tool_definitions = session_data.get("tool_definitions", [])
+                    if not sub_tool_definitions and fallback_tool_definitions:
+                        sub_tool_definitions = fallback_tool_definitions
+                    if sub_system_prompt and sub_tool_definitions:
+                        sub_system_prompt = rebuild_mcp_system_prompt(sub_system_prompt, sub_tool_definitions)
+                    if sub_system_prompt:
+                        sub_messages = [
+                            {"role": "system", "content": sub_system_prompt}
+                        ] + sub_messages
                     # Create separate images directory for each sub-agent
                     sub_images_dir = images_dir / f"{input_filename}_{session_name}_images"
 
@@ -449,25 +570,38 @@ def extract_and_save_sharegpt(
 
 def main():
     """Main function"""
+    import argparse
     import sys
 
-    if len(sys.argv) < 2:
-        print("Usage: python convert_to_sharegpt.py <log_file_path> [output_dir]")
-        print(
-            "Example: python convert_to_sharegpt.py logs/debug_logs/task_1.json"
-        )
-        print(
-            "Example: python convert_to_sharegpt.py logs/debug_logs/task_1.json ./sharegpt_output"
-        )
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Convert log files to ShareGPT format for multi-modal training."
+    )
+    parser.add_argument("log_file_path", help="Path to the log JSON file")
+    parser.add_argument("output_dir", nargs="?", default="sharegpt_output",
+                        help="Output directory for ShareGPT files (default: sharegpt_output)")
+    parser.add_argument("--tool-defs", default=None,
+                        help="Path to a JSON file containing tool_definitions "
+                             "(for old data missing tool definitions in the log)")
+    args = parser.parse_args()
 
-    log_file_path = Path(sys.argv[1])
-    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("sharegpt_output")
+    log_file_path = Path(args.log_file_path)
+    output_dir = Path(args.output_dir)
 
     # Check if input file exists
     if not log_file_path.exists():
         print(f"Error: Log file does not exist: {log_file_path}")
         sys.exit(1)
+
+    # Load external tool definitions if provided
+    fallback_tool_definitions = None
+    if args.tool_defs:
+        tool_defs_path = Path(args.tool_defs)
+        if not tool_defs_path.exists():
+            print(f"Error: Tool definitions file does not exist: {tool_defs_path}")
+            sys.exit(1)
+        with open(tool_defs_path, "r", encoding="utf-8") as f:
+            fallback_tool_definitions = json.load(f)
+        print(f"Loaded external tool definitions from: {tool_defs_path}")
 
     try:
         # Read log file
@@ -480,7 +614,10 @@ def main():
 
         # Extract and save ShareGPT format
         print(f"Converting to ShareGPT format to: {output_dir}")
-        extract_and_save_sharegpt(log_data, output_dir, input_filename, str(log_file_path))
+        extract_and_save_sharegpt(
+            log_data, output_dir, input_filename, str(log_file_path),
+            fallback_tool_definitions=fallback_tool_definitions,
+        )
 
         print("\n✓ ShareGPT conversion completed!")
         print(f"Output directory: {output_dir.absolute()}")
