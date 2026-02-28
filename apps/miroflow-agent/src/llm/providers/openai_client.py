@@ -160,7 +160,8 @@ class OpenAIClient(BaseClient):
 
         # Retry loop with dynamic max_tokens adjustment
         max_retries = 100
-        base_wait_time = 30
+        base_wait_time = 2
+        max_length_limit_retries = 3
         current_max_tokens = self.max_tokens
 
         # Convert MCP tool definitions to OpenAI function calling format if enabled
@@ -225,9 +226,9 @@ class OpenAIClient(BaseClient):
                 finish_reason = getattr(response.choices[0], "finish_reason", None)
                 if finish_reason == "length":
                     # If this is not the last retry, increase max_tokens and retry
-                    if attempt < max_retries - 1:
+                    if attempt < max_length_limit_retries - 1:
                         # Increase max_tokens by 10%
-                        current_max_tokens = int(current_max_tokens * 1.1)
+                        current_max_tokens = int(current_max_tokens * 1.2)
                         self.task_log.log_step(
                             "warning",
                             "LLM | Length Limit Reached",
@@ -369,6 +370,13 @@ class OpenAIClient(BaseClient):
                                     content_preview = str(content)[:1000] if len(str(content)) > 1000 else str(content)
                                     logger.error(f"Message {idx} [{role}]: {content_preview}")
                             logger.error("=== End Debug ===")
+                        elif "high risk" in str(e):
+                            self.task_log.log_step(
+                                "error",
+                                "LLM | API Error",
+                                "request was rejected because it was considered high risk"
+                            )
+                            raise e
                         await asyncio.sleep(base_wait_time)
                         continue
                     else:
@@ -775,7 +783,7 @@ class OpenAIClient(BaseClient):
 
         # Calculate token count for the last user message in message_history
         last_user_tokens = 0
-        if message_history[-1]["role"] == "user":
+        if message_history[-1]["role"] in ("user", "tool"):
             content = message_history[-1]["content"]
             if isinstance(content, list):
                 for item in content:
@@ -823,7 +831,7 @@ class OpenAIClient(BaseClient):
                 system_prompt = main_agent_msg.get('system_prompt', '')
             
             # Reconstruct the message history from last call (remove the last user message which is tool result)
-            last_call_message_history = message_history[:-1] if message_history and message_history[-1]["role"] == "user" else message_history
+            last_call_message_history = message_history[:-1] if message_history and message_history[-1]["role"] in ("user", "tool") else message_history
             
             # Build the full prompt that was sent in the last call
             if system_prompt and last_call_message_history:
@@ -855,8 +863,8 @@ class OpenAIClient(BaseClient):
                 "Context limit reached, proceeding to step back and summarize the conversation",
             )
 
-            # Remove the last user message (tool call results)
-            if message_history[-1]["role"] == "user":
+            # Remove the last user/tool message (tool call results)
+            if message_history[-1]["role"] in ("user", "tool"):
                 message_history.pop()
 
             # Remove the second-to-last assistant message (tool call request)

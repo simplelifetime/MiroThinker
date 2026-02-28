@@ -138,18 +138,18 @@ async def google_search(
         server_env["MIROFLOW_TASK_ID"] = os.environ["MIROFLOW_TASK_ID"]
 
     # DEBUG: Print environment variables being passed
-    print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: MIROFLOW_SEARCH_CACHE_ENABLED in os.environ = {'MIROFLOW_SEARCH_CACHE_ENABLED' in os.environ}", file=sys.stderr)
-    print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: os.environ.get('MIROFLOW_SEARCH_CACHE_ENABLED') = {os.environ.get('MIROFLOW_SEARCH_CACHE_ENABLED')}", file=sys.stderr)
-    if "MIROFLOW_SEARCH_CACHE_ENABLED" in server_env:
-        print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: PASSING MIROFLOW_SEARCH_CACHE_ENABLED={server_env['MIROFLOW_SEARCH_CACHE_ENABLED']} to serper_mcp_server", file=sys.stderr)
-    else:
-        print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: NOT passing MIROFLOW_SEARCH_CACHE_ENABLED to serper_mcp_server (not in environment)", file=sys.stderr)
-    print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: MIROFLOW_TASK_ID in os.environ = {'MIROFLOW_TASK_ID' in os.environ}", file=sys.stderr)
-    print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: os.environ.get('MIROFLOW_TASK_ID') = {os.environ.get('MIROFLOW_TASK_ID')}", file=sys.stderr)
-    if "MIROFLOW_TASK_ID" in server_env:
-        print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: PASSING task_id={server_env['MIROFLOW_TASK_ID']} to serper_mcp_server", file=sys.stderr)
-    else:
-        print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: NOT passing task_id to serper_mcp_server (not in environment)", file=sys.stderr)
+    # print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: MIROFLOW_SEARCH_CACHE_ENABLED in os.environ = {'MIROFLOW_SEARCH_CACHE_ENABLED' in os.environ}", file=sys.stderr)
+    # print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: os.environ.get('MIROFLOW_SEARCH_CACHE_ENABLED') = {os.environ.get('MIROFLOW_SEARCH_CACHE_ENABLED')}", file=sys.stderr)
+    # if "MIROFLOW_SEARCH_CACHE_ENABLED" in server_env:
+    #     print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: PASSING MIROFLOW_SEARCH_CACHE_ENABLED={server_env['MIROFLOW_SEARCH_CACHE_ENABLED']} to serper_mcp_server", file=sys.stderr)
+    # else:
+    #     print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: NOT passing MIROFLOW_SEARCH_CACHE_ENABLED to serper_mcp_server (not in environment)", file=sys.stderr)
+    # print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: MIROFLOW_TASK_ID in os.environ = {'MIROFLOW_TASK_ID' in os.environ}", file=sys.stderr)
+    # print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: os.environ.get('MIROFLOW_TASK_ID') = {os.environ.get('MIROFLOW_TASK_ID')}", file=sys.stderr)
+    # if "MIROFLOW_TASK_ID" in server_env:
+    #     print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: PASSING task_id={server_env['MIROFLOW_TASK_ID']} to serper_mcp_server", file=sys.stderr)
+    # else:
+    #     print(f"[SEARCH_CACHE] searching_google_mcp_server.google_search: NOT passing task_id to serper_mcp_server (not in environment)", file=sys.stderr)
 
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -720,12 +720,12 @@ async def scholar_search(
         server_env["MIROFLOW_TASK_ID"] = os.environ["MIROFLOW_TASK_ID"]
 
     # DEBUG: Print environment variables being passed
-    print(f"[SEARCH_CACHE] searching_google_mcp_server.scholar_search: MIROFLOW_TASK_ID in os.environ = {'MIROFLOW_TASK_ID' in os.environ}", file=sys.stderr)
-    print(f"[SEARCH_CACHE] searching_google_mcp_server.scholar_search: os.environ.get('MIROFLOW_TASK_ID') = {os.environ.get('MIROFLOW_TASK_ID')}", file=sys.stderr)
-    if "MIROFLOW_TASK_ID" in server_env:
-        print(f"[SEARCH_CACHE] searching_google_mcp_server.scholar_search: PASSING task_id={server_env['MIROFLOW_TASK_ID']} to serper_mcp_server", file=sys.stderr)
-    else:
-        print(f"[SEARCH_CACHE] searching_google_mcp_server.scholar_search: NOT passing task_id to serper_mcp_server (not in environment)", file=sys.stderr)
+    # print(f"[SEARCH_CACHE] searching_google_mcp_server.scholar_search: MIROFLOW_TASK_ID in os.environ = {'MIROFLOW_TASK_ID' in os.environ}", file=sys.stderr)
+    # print(f"[SEARCH_CACHE] searching_google_mcp_server.scholar_search: os.environ.get('MIROFLOW_TASK_ID') = {os.environ.get('MIROFLOW_TASK_ID')}", file=sys.stderr)
+    # if "MIROFLOW_TASK_ID" in server_env:
+    #     print(f"[SEARCH_CACHE] searching_google_mcp_server.scholar_search: PASSING task_id={server_env['MIROFLOW_TASK_ID']} to serper_mcp_server", file=sys.stderr)
+    # else:
+    #     print(f"[SEARCH_CACHE] searching_google_mcp_server.scholar_search: NOT passing task_id to serper_mcp_server (not in environment)", file=sys.stderr)
 
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -816,12 +816,12 @@ async def image_search(
         server_env["MIROFLOW_TASK_ID"] = os.environ["MIROFLOW_TASK_ID"]
 
     # DEBUG: Print environment variables being passed
-    print(f"[SEARCH_CACHE] searching_google_mcp_server.image_search: MIROFLOW_TASK_ID in os.environ = {'MIROFLOW_TASK_ID' in os.environ}", file=sys.stderr)
-    print(f"[SEARCH_CACHE] searching_google_mcp_server.image_search: os.environ.get('MIROFLOW_TASK_ID') = {os.environ.get('MIROFLOW_TASK_ID')}", file=sys.stderr)
-    if "MIROFLOW_TASK_ID" in server_env:
-        print(f"[SEARCH_CACHE] searching_google_mcp_server.image_search: PASSING task_id={server_env['MIROFLOW_TASK_ID']} to serper_mcp_server", file=sys.stderr)
-    else:
-        print(f"[SEARCH_CACHE] searching_google_mcp_server.image_search: NOT passing task_id to serper_mcp_server (not in environment)", file=sys.stderr)
+    # print(f"[SEARCH_CACHE] searching_google_mcp_server.image_search: MIROFLOW_TASK_ID in os.environ = {'MIROFLOW_TASK_ID' in os.environ}", file=sys.stderr)
+    # print(f"[SEARCH_CACHE] searching_google_mcp_server.image_search: os.environ.get('MIROFLOW_TASK_ID') = {os.environ.get('MIROFLOW_TASK_ID')}", file=sys.stderr)
+    # if "MIROFLOW_TASK_ID" in server_env:
+    #     print(f"[SEARCH_CACHE] searching_google_mcp_server.image_search: PASSING task_id={server_env['MIROFLOW_TASK_ID']} to serper_mcp_server", file=sys.stderr)
+    # else:
+    #     print(f"[SEARCH_CACHE] searching_google_mcp_server.image_search: NOT passing task_id to serper_mcp_server (not in environment)", file=sys.stderr)
 
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -912,12 +912,12 @@ async def visual_search(
         server_env["MIROFLOW_TASK_ID"] = os.environ["MIROFLOW_TASK_ID"]
 
     # DEBUG: Print environment variables being passed
-    print(f"[SEARCH_CACHE] searching_google_mcp_server.visual_search: MIROFLOW_TASK_ID in os.environ = {'MIROFLOW_TASK_ID' in os.environ}", file=sys.stderr)
-    print(f"[SEARCH_CACHE] searching_google_mcp_server.visual_search: os.environ.get('MIROFLOW_TASK_ID') = {os.environ.get('MIROFLOW_TASK_ID')}", file=sys.stderr)
-    if "MIROFLOW_TASK_ID" in server_env:
-        print(f"[SEARCH_CACHE] searching_google_mcp_server.visual_search: PASSING task_id={server_env['MIROFLOW_TASK_ID']} to serper_mcp_server", file=sys.stderr)
-    else:
-        print(f"[SEARCH_CACHE] searching_google_mcp_server.visual_search: NOT passing task_id to serper_mcp_server (not in environment)", file=sys.stderr)
+    # print(f"[SEARCH_CACHE] searching_google_mcp_server.visual_search: MIROFLOW_TASK_ID in os.environ = {'MIROFLOW_TASK_ID' in os.environ}", file=sys.stderr)
+    # print(f"[SEARCH_CACHE] searching_google_mcp_server.visual_search: os.environ.get('MIROFLOW_TASK_ID') = {os.environ.get('MIROFLOW_TASK_ID')}", file=sys.stderr)
+    # if "MIROFLOW_TASK_ID" in server_env:
+    #     print(f"[SEARCH_CACHE] searching_google_mcp_server.visual_search: PASSING task_id={server_env['MIROFLOW_TASK_ID']} to serper_mcp_server", file=sys.stderr)
+    # else:
+    #     print(f"[SEARCH_CACHE] searching_google_mcp_server.visual_search: NOT passing task_id to serper_mcp_server (not in environment)", file=sys.stderr)
 
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -977,18 +977,20 @@ async def scrape_website(url: str) -> str:
     if "huggingface.co/datasets" in url or "huggingface.co/spaces" in url:
         return "You are trying to scrape a Hugging Face dataset for answers, please do not use the scrape tool for this purpose."
 
-    if JINA_API_KEY == "":
-        return "JINA_API_KEY is not set, scrape_website tool is not available."
-
     try:
         # Use Jina.ai reader API to convert URL to LLM-friendly text
         jina_url = f"{JINA_BASE_URL}/{url}"
 
-        # Make request with proper headers
-        headers = {"Authorization": f"Bearer {JINA_API_KEY}"}
-
-        response = requests.get(jina_url, headers=headers, timeout=60)
-        response.raise_for_status()
+        # Try without API key first to save costs
+        try:
+            response = requests.get(jina_url, timeout=60)
+            response.raise_for_status()
+        except Exception:
+            if not JINA_API_KEY:
+                raise
+            headers = {"Authorization": f"Bearer {JINA_API_KEY}"}
+            response = requests.get(jina_url, headers=headers, timeout=60)
+            response.raise_for_status()
 
         # Get the content
         content = response.text.strip()

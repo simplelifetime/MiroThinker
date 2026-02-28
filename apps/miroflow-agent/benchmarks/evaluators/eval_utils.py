@@ -15,21 +15,21 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
+OPENAI_API_KEY = os.environ.get("EVAL_OPENAI_API_KEY")
+OPENAI_BASE_URL = os.environ.get("EVAL_OPENAI_BASE_URL")
 EVAL_API_VERSION = os.environ.get("EVAL_API_VERSION")
-EVAL_MODEL = os.environ.get("EVAL_MODEL", "gpt-4o")  # Default to gpt-4o if not set
+EVAL_MODEL = os.environ.get("EVAL_MODEL")
 
 
 
-evaluation_llm_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
-model_as_a_judge_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
-# evaluation_llm_client = AsyncAzureOpenAI(api_key=OPENAI_API_KEY,
-#     api_version=EVAL_API_VERSION,
-#     azure_endpoint=OPENAI_BASE_URL,)
-# model_as_a_judge_client = AzureOpenAI(api_key=OPENAI_API_KEY,
-#     api_version=EVAL_API_VERSION,
-#     azure_endpoint=OPENAI_BASE_URL,)
+# evaluation_llm_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+# model_as_a_judge_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+evaluation_llm_client = AsyncAzureOpenAI(api_key=OPENAI_API_KEY,
+    api_version=EVAL_API_VERSION,
+    azure_endpoint=OPENAI_BASE_URL,)
+model_as_a_judge_client = AzureOpenAI(api_key=OPENAI_API_KEY,
+    api_version=EVAL_API_VERSION,
+    azure_endpoint=OPENAI_BASE_URL,)
 
 
 # ================================================
@@ -169,7 +169,7 @@ reasoning: Explain why the extracted_final_answer is correct or incorrect based 
 
 correct: Answer 'yes' if extracted_final_answer matches the [correct_answer] given above, or is within a small margin of error for numerical problems. Answer 'no' otherwise, i.e. if there if there is any inconsistency, ambiguity, non-equivalency, or if the extracted answer is incorrect.
 
-confidence: The extracted confidence score between 0% and 100% from [response]. Put 100 if there is no confidence score available."""
+confidence: The extracted confidence score between 0|\%| and 100|\%| from [response]. Put 100 if there is no confidence score available."""
 
 
 class HLEExtractedAnswer(BaseModel):
@@ -965,7 +965,7 @@ async def _verify_answer_for_datasets_core(
         return result, "gaia_validation_text_103_judge", None
 
     # For browsecomp (English) and browsecomp-zh (Chinese), use different judges
-    elif benchmark_name == "browsecomp":
+    elif benchmark_name == "browsecomp" or benchmark_name == "mmbc":
         result = await verify_answer_browsecomp(question, target, predicted_answer)
         return result, "browsecomp_judge", None
 

@@ -347,6 +347,7 @@ class ProgressChecker:
         self.target_path = target_path
         self.run_dirs: List[str] = []
         self.total_tasks_per_run = task_per_run
+        self.dataset_total_tasks: int = 0
 
         # Load benchmark data
         self._load_benchmark_data(data_path)
@@ -358,6 +359,7 @@ class ProgressChecker:
             if os.path.exists(data_path):
                 with open(data_path) as f:
                     benchmark_data = [json.loads(line) for line in f.readlines()]
+                self.dataset_total_tasks = len(benchmark_data)
                 print(f"Loaded {len(benchmark_data)} tasks from {data_path}")
         except Exception as e:
             print(f"Warning: Could not load data: {e}")
@@ -383,6 +385,13 @@ class ProgressChecker:
                 raise PermissionError(
                     f"No permission to access directory '{self.target_path}'"
                 )
+
+        # If no run_* directories found, check if target_path itself contains task files
+        if not run_dirs:
+            task_files = glob.glob(os.path.join(self.target_path, "task_*.json"))
+            if task_files:
+                # Treat target_path itself as a run directory
+                run_dirs.append(self.target_path)
 
         # Sort by run number
         run_dirs.sort(key=lambda x: self._extract_run_number(x))
@@ -608,6 +617,10 @@ class ProgressChecker:
             run_name = os.path.basename(run_dir)
             stats, task_results = self.analyze_run_directory(run_dir, task_id_pattern)
 
+            # For dataset-based benchmarks, total tasks should reflect dataset size
+            if self.dataset_total_tasks > 0:
+                stats.total = self.dataset_total_tasks
+
             if stats.total == 0:
                 print(f"{run_name}: No task files found")
                 print()
@@ -646,6 +659,10 @@ class ProgressChecker:
             summary.total_failed += stats.failed
             summary.total_judge_correct += stats.judge_correct
             summary.total_no_boxed_found += stats.no_boxed_found
+
+        # If dataset size is known, Total Tasks should be dataset size (not sum over runs)
+        if self.dataset_total_tasks > 0:
+            summary.total_tasks = self.dataset_total_tasks
 
         # Display summary after all runs are processed
         self._display_summary(

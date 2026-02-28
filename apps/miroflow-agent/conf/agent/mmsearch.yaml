@@ -15,6 +15,10 @@ main_agent:
     - tool-image-processing
   tool_blacklist:
     - [ "search_and_scrape_webpage", "sogou_search" ]
+    - [ "tool-image-processing", "rotate" ]
+    - [ "tool-image-processing", "flip" ]
+    - [ "tool-image-processing", "put_box" ]
+    - [ "tool-image-processing", "get_image_info" ]
   max_turns: 20  # Maximum number of turns for main agent execution
 
 sub_agents:
