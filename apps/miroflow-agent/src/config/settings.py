@@ -64,6 +64,12 @@ SUMMARY_LLM_API_KEY = os.environ.get("SUMMARY_LLM_API_KEY")
 SUMMARY_LLM_BASE_URL = os.environ.get("SUMMARY_LLM_BASE_URL")
 SUMMARY_LLM_MODEL_NAME = os.environ.get("SUMMARY_LLM_MODEL_NAME")
 
+# API for Video Analysis
+VIDEO_API_KEY = os.environ.get("VIDEO_API_KEY")
+VIDEO_BASE_URL = os.environ.get("VIDEO_BASE_URL")
+VIDEO_MODEL_NAME = os.environ.get("VIDEO_MODEL_NAME")
+VIDEO_PROXY = os.environ.get("VIDEO_PROXY")
+
 
 # MCP server configuration generation function
 def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id: str = None):
@@ -436,6 +442,36 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
             }
         )
 
+    if (
+        agent_cfg.get("tools", None) is not None
+        and "tool-video-qa" in agent_cfg["tools"]
+    ):
+        # Prepare environment variables for video MCP server
+        video_env = {
+            "VIDEO_API_KEY": VIDEO_API_KEY,
+            "VIDEO_BASE_URL": VIDEO_BASE_URL,
+            "VIDEO_MODEL_NAME": VIDEO_MODEL_NAME,
+            "OPENAI_API_KEY": OPENAI_API_KEY,
+            "OPENAI_BASE_URL": OPENAI_BASE_URL,
+        }
+        # Only add VIDEO_PROXY if it's actually set
+        if VIDEO_PROXY:
+            video_env["VIDEO_PROXY"] = VIDEO_PROXY
+
+        configs.append(
+            {
+                "name": "tool-video-qa",
+                "params": StdioServerParameters(
+                    command=sys.executable,
+                    args=[
+                        "-m",
+                        "miroflow_tools.mcp_servers.video_mcp_server",
+                    ],
+                    env=video_env,
+                ),
+            }
+        )
+
     blacklist = set()
     for black_list_item in agent_cfg.get("tool_blacklist", []):
         blacklist.add((black_list_item[0], black_list_item[1]))
@@ -530,6 +566,7 @@ def get_env_info(cfg: DictConfig) -> dict:
         "has_tencent_secret_id": bool(TENCENTCLOUD_SECRET_ID),
         "has_tencent_secret_key": bool(TENCENTCLOUD_SECRET_KEY),
         "has_summary_llm_api_key": bool(SUMMARY_LLM_API_KEY),
+        "has_video_api_key": bool(VIDEO_API_KEY),
         # Base URLs
         "openai_base_url": OPENAI_BASE_URL,
         "anthropic_base_url": ANTHROPIC_BASE_URL,
@@ -539,4 +576,5 @@ def get_env_info(cfg: DictConfig) -> dict:
         "vision_base_url": VISION_BASE_URL,
         "reasoning_base_url": REASONING_BASE_URL,
         "summary_llm_base_url": SUMMARY_LLM_BASE_URL,
+        "video_base_url": VIDEO_BASE_URL,
     }

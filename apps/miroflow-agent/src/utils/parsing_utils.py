@@ -37,7 +37,7 @@ def filter_none_values(arguments: Union[Dict, Any]) -> Union[Dict, Any]:
 
 
 def _fix_backslash_escapes(json_str: str) -> str:
-    """
+    r"""
     Fix common backslash escape issues in JSON strings.
     This handles cases where backslashes in string values are not properly escaped.
 
