@@ -20,6 +20,7 @@ SERPER_API_KEY = os.environ.get("SERPER_API_KEY", "")
 SERPER_BASE_URL = os.environ.get("SERPER_BASE_URL", "https://google.serper.dev")
 JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
 JINA_BASE_URL = os.environ.get("JINA_BASE_URL", "https://r.jina.ai")
+GOOGLE_SEARCH_PROXY = os.environ.get("GOOGLE_SEARCH_PROXY", "serper")
 
 # Google search result filtering environment variables
 REMOVE_SNIPPETS = os.environ.get("REMOVE_SNIPPETS", "").lower() in ("true", "1", "yes")
@@ -106,9 +107,10 @@ async def google_search(
     Returns:
         The search results.
     """
-    if SERPER_API_KEY == "":
+    if GOOGLE_SEARCH_PROXY != "api_hub" and SERPER_API_KEY == "":
         return (
-            "[ERROR]: SERPER_API_KEY is not set, google_search tool is not available."
+            "[ERROR]: SERPER_API_KEY is not set and GOOGLE_SEARCH_PROXY is not 'api_hub', "
+            "google_search tool is not available."
         )
 
     tool_name = "google_search"
@@ -129,7 +131,9 @@ async def google_search(
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
-    # Pass through MIROFLOW_SEARCH_CACHE_* and MIROFLOW_TASK_ID if set
+    for key in ("GOOGLE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL"):
+        if key in os.environ:
+            server_env[key] = os.environ[key]
     if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
         server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
     if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
@@ -712,9 +716,10 @@ async def scholar_search(
     Returns:
         The scholarly search results.
     """
-    if SERPER_API_KEY == "":
+    if GOOGLE_SEARCH_PROXY != "api_hub" and SERPER_API_KEY == "":
         return (
-            "[ERROR]: SERPER_API_KEY is not set, scholar_search tool is not available."
+            "[ERROR]: SERPER_API_KEY is not set and GOOGLE_SEARCH_PROXY is not 'api_hub', "
+            "scholar_search tool is not available."
         )
 
     tool_name = "scholar_search"
@@ -730,7 +735,9 @@ async def scholar_search(
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
-    # Pass through MIROFLOW_SEARCH_CACHE_* and MIROFLOW_TASK_ID if set
+    for key in ("GOOGLE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL"):
+        if key in os.environ:
+            server_env[key] = os.environ[key]
     if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
         server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
     if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:

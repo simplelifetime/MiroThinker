@@ -90,18 +90,24 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
         agent_cfg.get("tools", None) is not None
         and "tool-google-search" in agent_cfg["tools"]
     ):
-        if not SERPER_API_KEY:
+        google_search_proxy = os.environ.get("GOOGLE_SEARCH_PROXY", "serper")
+        if google_search_proxy != "api_hub" and not SERPER_API_KEY:
             raise ValueError(
-                "SERPER_API_KEY not set, tool-google-search will be unavailable."
+                "SERPER_API_KEY not set and GOOGLE_SEARCH_PROXY is not 'api_hub', "
+                "tool-google-search will be unavailable."
             )
 
         # Prepare environment variables for google search MCP server
         google_search_env = {
-            "SERPER_API_KEY": SERPER_API_KEY,
+            "SERPER_API_KEY": SERPER_API_KEY or "",
             "SERPER_BASE_URL": SERPER_BASE_URL,
             "JINA_API_KEY": JINA_API_KEY,
             "JINA_BASE_URL": JINA_BASE_URL,
         }
+        # Pass through GOOGLE_SEARCH_PROXY and APIHUB_* if set
+        for key in ("GOOGLE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL"):
+            if key in os.environ:
+                google_search_env[key] = os.environ[key]
         # Pass through MIROFLOW_SEARCH_CACHE_* if set
         if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
             google_search_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
