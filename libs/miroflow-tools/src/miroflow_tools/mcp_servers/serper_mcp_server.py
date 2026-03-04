@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 import requests
 from mcp.server.fastmcp import FastMCP
 from tenacity import (
+    RetryError
     retry,
     retry_if_exception_type,
     stop_after_attempt,
@@ -102,17 +103,23 @@ mcp = FastMCP("serper-mcp-server")
 
 
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=4, max=60),
     retry=retry_if_exception_type(
         (requests.ConnectionError, requests.Timeout, requests.HTTPError)
+    ),
+    before_sleep=lambda retry_state: logger.warning(
+        f"Serper API request failed (attempt {retry_state.attempt_number}), "
+        f"retrying in {retry_state.next_action.sleep:.1f}s: {retry_state.outcome.exception()}"
     ),
 )
 def make_serper_request(
     endpoint: str, payload: Dict[str, Any], headers: Dict[str, str]
 ) -> requests.Response:
     """Make HTTP request to Serper API with retry logic."""
-    response = requests.post(f"{SERPER_BASE_URL}/{endpoint}", json=payload, headers=headers)
+    response = requests.post(
+        f"{SERPER_BASE_URL}/{endpoint}", json=payload, headers=headers, timeout=30
+    )
     response.raise_for_status()
     return response
 
@@ -274,8 +281,22 @@ def google_search(
         #     logger.info(f"[SEARCH_CACHE] google_search: saved cache to file")
 
         return result_json
-
+    except RetryError as e:
+        last_exception = e.last_attempt.exception()
+        status_code = None
+        if isinstance(last_exception, requests.HTTPError) and last_exception.response is not None:
+            status_code = last_exception.response.status_code
+        error_msg = (
+            f"Serper API request failed after retries: "
+            f"status_code={status_code}, last_error={str(last_exception)}"
+        )
+        logger.error(error_msg)
+        return json.dumps(
+            {"success": False, "retryable": True, "error": error_msg, "results": []},
+            ensure_ascii=False,
+        )
     except Exception as e:
+        logger.error(f"Unexpected error in google_search: {str(e)}")
         return json.dumps(
             {"success": False, "error": f"Unexpected error: {str(e)}", "results": []},
             ensure_ascii=False,

@@ -159,7 +159,8 @@ async def google_search(
     result_content = ""
 
     retry_count = 0
-    max_retries = 3
+    max_retries = 5
+    last_error = None
 
     while retry_count < max_retries:
         try:
@@ -178,14 +179,32 @@ async def google_search(
                         result_content is not None and result_content.strip() != ""
                     ), "Empty result from google_search tool, please try again."
                     # Apply filtering based on environment variables
+                    try:
+                        result_json = json.loads(result_content)
+                        if isinstance(result_json, dict) and result_json.get("success") is False:
+                            error_msg = result_json.get("error", "Unknown error")
+                            raise RuntimeError(
+                                f"google_search returned failure: {error_msg}"
+                            )
+                    except json.JSONDecodeError:
+                        pass
                     filtered_result = filter_google_search_result(result_content)
                     return filtered_result  # Success, exit retry loop
         except Exception as error:
+            last_error = error
             retry_count += 1
             if retry_count >= max_retries:
-                return f"[ERROR]: google_search tool execution failed after {max_retries} attempts: {str(error)}"
-            # Wait before retrying
-            await asyncio.sleep(min(2**retry_count, 60))
+                return (
+                    f"[ERROR]: google_search tool execution failed after "
+                    f"{max_retries} attempts: {str(last_error)}"
+                )
+            wait_time = min(2**retry_count, 60)
+            print(
+                f"[WARN] google_search attempt {retry_count}/{max_retries} failed: "
+                f"{str(error)}, retrying in {wait_time}s...",
+                file=sys.stderr,
+            )
+            await asyncio.sleep(wait_time)
 
     return "[ERROR]: Unknown error occurred in google_search tool, please try again."
 
