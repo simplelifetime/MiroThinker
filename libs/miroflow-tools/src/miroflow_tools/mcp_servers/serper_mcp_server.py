@@ -107,6 +107,10 @@ APIHUB_URL = "https://gpt.bytedance.net/gpt/tool_hub/online/mcp_server/proxy/api
 APIHUB_API_KEY = os.getenv("APIHUB_API_KEY", "")
 APIHUB_USER_EMAIL = os.getenv("APIHUB_USER_EMAIL", "")
 
+# global_search_v2 for ImageSearch/VisualSearch (different MCP server, different api_key)
+GLOBAL_SEARCH_URL = "https://gpt.bytedance.net/gpt/tool_hub/online/mcp_server/proxy/global_search_v2/mcp"
+GLOBAL_SEARCH_API_KEY = os.getenv("GLOBAL_SEARCH_API_KEY", "c165b7dc-5a6d-4f37-b37d-87fced6ece7a")
+
 _apihub_auth_proxy = None
 
 def _get_apihub_auth_proxy():
@@ -252,6 +256,176 @@ def _apihub_scholar_search(q: str, gl: str, hl: str, num: int) -> dict:
     return {
         "searchParameters": {"q": q, "gl": gl, "hl": hl, "num": num, "type": "scholar"},
         "organic": organic[:num],
+    }
+
+
+def _make_global_search_request(tool_name: str, arguments: Dict[str, Any], max_attempts: int = 3) -> Dict[str, Any]:
+    """
+    Make a synchronous request to global_search_v2 MCP server.
+    Used for ImageSearch and VisualSearch.
+    """
+    auth_proxy = _get_apihub_auth_proxy()
+    headers = {
+        "api-key": GLOBAL_SEARCH_API_KEY,
+        "Content-Type": "application/json",
+        "call_email": APIHUB_USER_EMAIL,
+    }
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments,
+        },
+    }
+
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = auth_proxy.post(url=GLOBAL_SEARCH_URL, headers=headers, json=payload, timeout=60)
+            resp_json = resp.json()
+
+            result = resp_json.get("result", {})
+            if result.get("isError"):
+                content = result.get("content", [])
+                text = next((c["text"] for c in content if c.get("type") == "text"), "unknown error")
+                raise RuntimeError(f"global_search_v2 error: {text[:300]}")
+
+            mcp_content = result["content"]
+            text_item = next(item for item in mcp_content if item.get("type") == "text")
+            inner = json.loads(text_item["text"])
+            sr_data = inner.get("result", inner)
+            return sr_data
+
+        except Exception as e:
+            last_error = e
+            logger.warning(f"global_search_v2 {tool_name} failed (attempt {attempt}/{max_attempts}): {e}")
+            if attempt < max_attempts:
+                time.sleep(2 * attempt)
+
+    raise last_error
+
+
+def _apihub_image_search(q: str, gl: str, hl: str, num: int) -> dict:
+    """
+    Execute image search via global_search_v2 ImageSearch.
+    Converts response to match Serper /images format.
+
+    Serper images item: title, imageUrl, imageWidth, imageHeight, thumbnailUrl,
+                        source, domain, link, position
+    """
+    sr_data = _make_global_search_request("ImageSearch", {
+        "search_request_list": [{"query": q.strip(), "thumbnail_size": "medium"}]
+    })
+
+    images = []
+    for sr in sr_data.get("search_response_list", []):
+        for idx, doc in enumerate(sr.get("documents", [])):
+            di = doc.get("doc_info", doc)
+            title = di.get("title", "")
+            link = di.get("url", "")
+
+            image_url = ""
+            thumbnail_url = ""
+            width = 0
+            height = 0
+            text_snippet = ""
+            for s in di.get("snippet", []):
+                if s.get("type") == "image":
+                    img = s.get("image", {})
+                    image_url = img.get("image_url") or img.get("display_url") or img.get("internal_url", "")
+                    thumbnail_url = img.get("thumbnail_internal_url") or img.get("thumbnail_display_url", "")
+                    width = img.get("width", 0)
+                    height = img.get("height", 0)
+                elif s.get("type") == "text":
+                    text_snippet = s.get("text", "")
+
+            images.append({
+                "title": title,
+                "imageUrl": image_url or thumbnail_url,
+                "imageWidth": width,
+                "imageHeight": height,
+                "thumbnailUrl": thumbnail_url,
+                "link": link,
+                "source": title,
+                "position": idx + 1,
+            })
+
+    return {
+        "searchParameters": {"q": q, "gl": gl, "hl": hl, "num": num, "type": "images"},
+        "images": images[:num],
+    }
+
+
+def _apihub_visual_search(image_url: str, gl: str, hl: str, num: int) -> dict:
+    """
+    Execute visual search via global_search_v2 VisualSearch.
+    Converts response to match Serper /lens format.
+
+    Serper lens organic item: title, link, snippet, imageUrl, position
+    """
+    image_base64 = None
+    try:
+        resp = requests.get(image_url.strip(), timeout=30)
+        resp.raise_for_status()
+        image_base64 = base64.b64encode(resp.content).decode("utf-8")
+    except Exception as e:
+        logger.warning(f"Failed to download image for visual search: {e}")
+
+    search_request: Dict[str, Any] = {
+        "query": "",
+        "image_query": {
+            "url": image_url.strip(),
+            "region_of_interest": {"x_min": 0, "y_min": 0, "x_max": 1, "y_max": 1},
+        },
+        "thumbnail_size": "medium",
+    }
+    if image_base64:
+        search_request["image_query"]["image_base64"] = image_base64
+
+    sr_data = _make_global_search_request("VisualSearch", {
+        "search_request_list": [search_request]
+    })
+
+    organic = []
+    all_images = []
+    for sr in sr_data.get("search_response_list", []):
+        for idx, doc in enumerate(sr.get("documents", [])):
+            di = doc.get("doc_info", doc)
+            title = di.get("title", "")
+            link = di.get("url", "")
+
+            image_url_val = ""
+            thumbnail_url = ""
+            text_snippet = ""
+            for s in di.get("snippet", []):
+                if s.get("type") == "image":
+                    img = s.get("image", {})
+                    image_url_val = img.get("image_url") or img.get("display_url") or img.get("internal_url", "")
+                    thumbnail_url = img.get("thumbnail_internal_url") or img.get("thumbnail_display_url", "")
+                elif s.get("type") == "text":
+                    text_snippet = s.get("text", "")
+
+            organic.append({
+                "title": title,
+                "link": link,
+                "snippet": text_snippet,
+                "imageUrl": image_url_val or thumbnail_url,
+                "position": idx + 1,
+            })
+            if image_url_val or thumbnail_url:
+                all_images.append({
+                    "title": title,
+                    "link": link,
+                    "imageUrl": image_url_val or thumbnail_url,
+                    "thumbnailUrl": thumbnail_url,
+                    "position": idx + 1,
+                })
+
+    return {
+        "searchParameters": {"q": image_url, "gl": gl, "hl": hl, "num": num, "type": "lens"},
+        "organic": organic[:num],
+        "images": all_images[:num],
     }
 
 
@@ -543,25 +717,10 @@ def image_search(
         Dictionary containing image search results and metadata.
         Images are returned with URLs and metadata, without base64 encoding.
     """
-    # Check for API key
-    if not SERPER_API_KEY:
-        return json.dumps(
-            {
-                "success": False,
-                "error": "SERPER_API_KEY environment variable not set",
-                "results": [],
-            },
-            ensure_ascii=False,
-        )
-
     # Validate required parameter
     if not q or not q.strip():
         return json.dumps(
-            {
-                "success": False,
-                "error": "Search query 'q' is required and cannot be empty",
-                "results": [],
-            },
+            {"success": False, "error": "Search query 'q' is required and cannot be empty", "results": []},
             ensure_ascii=False,
         )
 
@@ -576,12 +735,7 @@ def image_search(
     normalized_num = num if num is not None else 5
     normalized_page = page if page is not None else 1
 
-    cache_params = {
-        "gl": gl,
-        "hl": hl,
-        "num": normalized_num,
-        "page": normalized_page,
-    }
+    cache_params = {"gl": gl, "hl": hl, "num": normalized_num, "page": normalized_page}
     if location:
         cache_params["location"] = location
 
@@ -591,32 +745,28 @@ def image_search(
         return cached_result
 
     try:
-        # Build payload with all supported parameters
-        payload: dict[str, Any] = {
-            "q": q.strip(),
-            "gl": gl,
-            "hl": hl,
-        }
-
-        # Add optional parameters if provided
-        if location:
-            payload["location"] = location
-        if num is not None:
-            payload["num"] = num
+        if GOOGLE_SEARCH_PROXY == "api_hub":
+            data = _apihub_image_search(q, gl, hl, normalized_num)
         else:
-            payload["num"] = 5  # Default
-        if page is not None:
-            payload["page"] = page
+            if not SERPER_API_KEY:
+                return json.dumps(
+                    {"success": False, "error": "SERPER_API_KEY environment variable not set", "results": []},
+                    ensure_ascii=False,
+                )
 
-        # Set up headers
-        headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
+            payload: dict[str, Any] = {"q": q.strip(), "gl": gl, "hl": hl}
+            if location:
+                payload["location"] = location
+            payload["num"] = num if num is not None else 5
+            if page is not None:
+                payload["page"] = page
 
-        # Make the API request to images endpoint
-        response = make_serper_request("images", payload, headers)
-        data = response.json()
+            headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
+            response = make_serper_request("images", payload, headers)
+            data = response.json()
+
         data = decode_http_urls_in_dict(data)
 
-        # Limit images to requested number (return metadata only, no download/encoding)
         requested_num = num if num is not None else 5
         if "images" in data and isinstance(data["images"], list):
             data["images"] = data["images"][:requested_num]
@@ -673,63 +823,43 @@ def visual_search(
         Dictionary containing visually similar image search results and metadata.
         Images are returned with URLs and metadata, without base64 encoding.
     """
-    # Check for API key
-    if not SERPER_API_KEY:
-        return json.dumps(
-            {
-                "success": False,
-                "error": "SERPER_API_KEY environment variable not set",
-                "results": [],
-            },
-            ensure_ascii=False,
-        )
-
     # Validate required parameter
     if not image_url or not image_url.strip():
         return json.dumps(
-            {
-                "success": False,
-                "error": "Image URL 'image_url' is required and cannot be empty",
-                "results": [],
-            },
+            {"success": False, "error": "Image URL 'image_url' is required and cannot be empty", "results": []},
             ensure_ascii=False,
         )
 
     # Basic URL validation
     if not image_url.startswith(("http://", "https://")):
         return json.dumps(
-            {
-                "success": False,
-                "error": "Invalid image URL format. URLs must start with http:// or https://",
-                "results": [],
-            },
+            {"success": False, "error": "Invalid image URL format. URLs must start with http:// or https://", "results": []},
             ensure_ascii=False,
         )
 
     try:
-        # Build payload with all supported parameters
-        payload: dict[str, Any] = {
-            "url": image_url.strip(),
-            "gl": gl,
-            "hl": hl,
-        }
+        requested_num = num if num is not None else 5
 
-        # Add optional parameters if provided
-        if location:
-            payload["location"] = location
-        if num is not None:
-            payload["num"] = num
+        if GOOGLE_SEARCH_PROXY == "api_hub":
+            data = _apihub_visual_search(image_url, gl, hl, requested_num)
         else:
-            payload["num"] = 5  # Default
-        if page is not None:
-            payload["page"] = page
+            if not SERPER_API_KEY:
+                return json.dumps(
+                    {"success": False, "error": "SERPER_API_KEY environment variable not set", "results": []},
+                    ensure_ascii=False,
+                )
 
-        # Set up headers
-        headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
+            payload: dict[str, Any] = {"url": image_url.strip(), "gl": gl, "hl": hl}
+            if location:
+                payload["location"] = location
+            payload["num"] = requested_num
+            if page is not None:
+                payload["page"] = page
 
-        # Make the API request to lens endpoint
-        response = make_serper_request("lens", payload, headers)
-        data = response.json()
+            headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
+            response = make_serper_request("lens", payload, headers)
+            data = response.json()
+
         data = decode_http_urls_in_dict(data)
 
         # Limit organic results to the requested number

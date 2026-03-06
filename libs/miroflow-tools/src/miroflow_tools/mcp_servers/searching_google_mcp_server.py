@@ -833,7 +833,9 @@ async def image_search(
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
-    # Pass through MIROFLOW_SEARCH_CACHE_* and MIROFLOW_TASK_ID if set
+    for key in ("GOOGLE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL", "GLOBAL_SEARCH_API_KEY"):
+        if key in os.environ:
+            server_env[key] = os.environ[key]
     if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
         server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
     if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
@@ -929,7 +931,9 @@ async def visual_search(
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
-    # Pass through MIROFLOW_SEARCH_CACHE_* and MIROFLOW_TASK_ID if set
+    for key in ("GOOGLE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL", "GLOBAL_SEARCH_API_KEY"):
+        if key in os.environ:
+            server_env[key] = os.environ[key]
     if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
         server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
     if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
