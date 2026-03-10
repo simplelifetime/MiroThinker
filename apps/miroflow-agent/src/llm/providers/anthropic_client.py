@@ -168,9 +168,9 @@ class AnthropicClient(BaseClient):
                 "LLM | Call Status",
                 f"LLM call status: {getattr(response, 'stop_reason', 'N/A')}",
             )
-            # Return the original messages_history (not the filtered copy)
-            # This ensures that the complete conversation history is preserved in logs
-            return response, messages_history
+            # Return the filtered messages_for_llm (not the original messages_history)
+            # This ensures that omitted messages stay omitted across turns
+            return response, messages_for_llm
         except asyncio.CancelledError:
             self.task_log.log_step(
                 "warning",

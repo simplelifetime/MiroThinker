@@ -243,8 +243,9 @@ class OpenAIClient(BaseClient):
                             "LLM | Length Limit Reached - Returning Truncated Response",
                             f"Response was truncated after {max_retries} attempts. Returning truncated response to allow ReAct loop to continue.",
                         )
-                        # Return the truncated response and let the orchestrator handle it
-                        return response, messages_history
+                        # Return the truncated response and filtered message history
+                        filtered_message_history = messages_for_llm[1:] if messages_for_llm and messages_for_llm[0].get("role") in ["system", "developer"] else messages_for_llm
+                        return response, filtered_message_history
 
                 # Check if the last 50 characters of the response appear more than 5 times in the response content.
                 # If so, treat it as a severe repeat and trigger a retry.
@@ -276,9 +277,11 @@ class OpenAIClient(BaseClient):
                                 f"Severe repeat detected after {max_retries} attempts. Returning response anyway.",
                             )
 
-                # Success - return the original messages_history (not the filtered copy)
-                # This ensures that the complete conversation history is preserved in logs
-                return response, messages_history
+                # Success - return the filtered messages_for_llm (not the original messages_history)
+                # This ensures that omitted messages stay omitted across turns
+                # Remove system prompt before returning (it was added at index 0)
+                filtered_message_history = messages_for_llm[1:] if messages_for_llm and messages_for_llm[0].get("role") in ["system", "developer"] else messages_for_llm
+                return response, filtered_message_history
 
             except asyncio.TimeoutError as e:
                 if attempt < max_retries - 1:
