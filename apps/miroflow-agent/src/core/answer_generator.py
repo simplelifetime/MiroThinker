@@ -200,7 +200,7 @@ class AnswerGenerator:
 
         # Build failure summary history
         failure_summary_history = message_history.copy()
-        if failure_summary_history and failure_summary_history[-1]["role"] in ("user", "tool"):
+        while failure_summary_history and failure_summary_history[-1]["role"] in ("user", "tool"):
             failure_summary_history.pop()
 
         # Add failure summary prompt and assistant prefix for structured output
@@ -279,7 +279,7 @@ class AnswerGenerator:
             agent_type="main",
         )
 
-        if message_history[-1]["role"] in ("user", "tool"):
+        while message_history and message_history[-1]["role"] in ("user", "tool"):
             message_history.pop(-1)
         message_history.append({"role": "user", "content": summary_prompt})
 

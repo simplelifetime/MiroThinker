@@ -680,7 +680,7 @@ class Orchestrator:
             agent_type=sub_agent_name,
         )
 
-        if message_history[-1]["role"] in ("user", "tool"):
+        while message_history and message_history[-1]["role"] in ("user", "tool"):
             message_history.pop()
         message_history.append({"role": "user", "content": summary_prompt})
 
