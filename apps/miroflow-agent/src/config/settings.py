@@ -64,6 +64,15 @@ SUMMARY_LLM_API_KEY = os.environ.get("SUMMARY_LLM_API_KEY")
 SUMMARY_LLM_BASE_URL = os.environ.get("SUMMARY_LLM_BASE_URL")
 SUMMARY_LLM_MODEL_NAME = os.environ.get("SUMMARY_LLM_MODEL_NAME")
 
+# Proxy environment variables to forward to MCP server subprocesses.
+# StdioServerParameters.env replaces (not inherits) the parent environment,
+# so proxy vars must be passed explicitly for subprocesses to reach the internet.
+_PROXY_ENV = {
+    k: v
+    for k, v in os.environ.items()
+    if k.lower() in ("http_proxy", "https_proxy", "no_proxy", "all_proxy")
+}
+
 
 # MCP server configuration generation function
 def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id: str = None):
@@ -99,6 +108,7 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
 
         # Prepare environment variables for google search MCP server
         google_search_env = {
+            **_PROXY_ENV,
             "SERPER_API_KEY": SERPER_API_KEY or "",
             "SERPER_BASE_URL": SERPER_BASE_URL,
             "JINA_API_KEY": JINA_API_KEY,
@@ -145,6 +155,7 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
                         "miroflow_tools.mcp_servers.searching_sogou_mcp_server",
                     ],
                     env={
+                        **_PROXY_ENV,
                         "TENCENTCLOUD_SECRET_ID": TENCENTCLOUD_SECRET_ID,
                         "TENCENTCLOUD_SECRET_KEY": TENCENTCLOUD_SECRET_KEY,
                         "JINA_API_KEY": JINA_API_KEY,
@@ -317,6 +328,7 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
                         "miroflow_tools.dev_mcp_servers.search_and_scrape_webpage",
                     ],
                     env={
+                        **_PROXY_ENV,
                         "SERPER_API_KEY": SERPER_API_KEY,
                         "SERPER_BASE_URL": SERPER_BASE_URL,
                         "TENCENTCLOUD_SECRET_ID": TENCENTCLOUD_SECRET_ID,
@@ -340,6 +352,7 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
                         "miroflow_tools.dev_mcp_servers.jina_scrape_llm_summary",
                     ],
                     env={
+                        **_PROXY_ENV,
                         "JINA_API_KEY": JINA_API_KEY,
                         "JINA_BASE_URL": JINA_BASE_URL,
                         "SUMMARY_LLM_BASE_URL": SUMMARY_LLM_BASE_URL,
