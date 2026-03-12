@@ -158,6 +158,24 @@ class OpenAIClient(BaseClient):
             messages_for_llm, keep_tool_result
         )
 
+        # Sanitize: some API proxies (e.g. Gemini gateway) reject messages
+        # where content is None or "".  Assistant messages WITH tool_calls
+        # having empty content is normal (the model is just calling tools
+        # without saying anything), so we leave those alone — only patch
+        # truly broken cases (empty content without tool_calls).
+        for msg in messages_for_llm:
+            content = msg.get("content")
+            is_empty = content is None or (isinstance(content, str) and content.strip() == "")
+            if not is_empty:
+                continue
+            role = msg.get("role", "")
+            if role == "assistant" and not msg.get("tool_calls"):
+                msg["content"] = "..."
+            elif role == "tool":
+                msg["content"] = "No output."
+            elif role == "user":
+                msg["content"] = "..."
+
         # Retry loop with dynamic max_tokens adjustment
         max_retries = 100
         base_wait_time = 2
@@ -328,71 +346,40 @@ class OpenAIClient(BaseClient):
                     )
                     raise e
                 else:
+                    error_str = str(e)
+                    # Non-retryable errors: raise immediately instead of wasting retries
+                    if "high risk" in error_str:
+                        self.task_log.log_step(
+                            "error",
+                            "LLM | API Error",
+                            "request was rejected because it was considered high risk"
+                        )
+                        raise e
+
                     if attempt < max_retries - 1:
                         self.task_log.log_step(
                             "warning",
                             "LLM | API Error",
-                            f"Error (attempt {attempt + 1}/{max_retries}): {str(e)}, retrying...",
+                            f"Error (attempt {attempt + 1}/{max_retries}): {error_str}, retrying...",
                         )
-                        # Debug: Print messages content when InvalidParameter error occurs
-                        if "InvalidParameter" in str(e) or "Invalid base64" in str(e):
-                            logger.error("=== Debug: Messages content when InvalidParameter error ===")
-                            for idx, msg in enumerate(messages_for_llm):
-                                role = msg.get("role", "unknown")
-                                content = msg.get("content", "")
-                                if isinstance(content, list):
-                                    logger.error(f"Message {idx} [{role}]: (multimodal content)")
-                                    for item_idx, item in enumerate(content):
-                                        item_type = item.get("type", "unknown")
-                                        if item_type == "image_url":
-                                            image_url = item.get("image_url", {})
-                                            if isinstance(image_url, dict):
-                                                url = image_url.get("url", "")
-                                            else:
-                                                url = str(image_url)
-                                            # Print first 200 chars of image_url to identify the problematic one
-                                            logger.error(f"  Item {item_idx} [image_url]: {url[:200]}...")
-                                            # Validate base64 data
-                                            if url.startswith("data:"):
-                                                try:
-                                                    # Extract base64 part
-                                                    if "," in url:
-                                                        header, b64_data = url.split(",", 1)
-                                                        logger.error(f"    -> Header: {header}, Base64 length: {len(b64_data)}")
-                                                        # Check for common issues
-                                                        if len(b64_data) < 100:
-                                                            logger.error(f"    -> WARNING: Base64 data too short!")
-                                                        # Try to decode to check validity
-                                                        import base64 as b64_module
-                                                        try:
-                                                            decoded = b64_module.b64decode(b64_data)
-                                                            logger.error(f"    -> Decoded size: {len(decoded)} bytes, First 20 bytes: {decoded[:20]}")
-                                                            # Check if it's HTML
-                                                            if decoded[:20].strip().lower().startswith((b'<!doctype', b'<html', b'<head', b'<?xml')):
-                                                                logger.error(f"    -> ERROR: Decoded content is HTML, not an image!")
-                                                        except Exception as decode_err:
-                                                            logger.error(f"    -> ERROR: Failed to decode base64: {decode_err}")
-                                                    else:
-                                                        logger.error(f"    -> WARNING: No comma found in data URL")
-                                                except Exception as parse_err:
-                                                    logger.error(f"    -> ERROR parsing data URL: {parse_err}")
-                                        elif item_type == "text":
-                                            text = item.get("text", "")
-                                            logger.error(f"  Item {item_idx} [text]: {text[:500]}...")
-                                        else:
-                                            logger.error(f"  Item {item_idx} [{item_type}]: {str(item)[:200]}...")
-                                else:
-                                    # Truncate long text content
-                                    content_preview = str(content)[:1000] if len(str(content)) > 1000 else str(content)
-                                    logger.error(f"Message {idx} [{role}]: {content_preview}")
-                            logger.error("=== End Debug ===")
-                        elif "high risk" in str(e):
-                            self.task_log.log_step(
-                                "error",
-                                "LLM | API Error",
-                                "request was rejected because it was considered high risk"
-                            )
-                            raise e
+                        # Debug: Print messages content for content-related errors
+                        should_dump_messages = (
+                            "InvalidParameter" in error_str
+                            or "Invalid base64" in error_str
+                            or "-4003" in error_str
+                            or "至少要包含" in error_str
+                        )
+                        if should_dump_messages:
+                            self._debug_dump_messages(messages_for_llm, error_str)
+                            # -4003 is a content validation error, retrying won't help
+                            if "-4003" in error_str or "至少要包含" in error_str:
+                                self.task_log.log_step(
+                                    "error",
+                                    "LLM | Content Validation Error (-4003)",
+                                    "Messages contain empty content or unreachable image URLs. "
+                                    "Check debug logs above for details. Not retrying.",
+                                )
+                                raise e
                         await asyncio.sleep(base_wait_time)
                         continue
                     else:
@@ -405,6 +392,81 @@ class OpenAIClient(BaseClient):
 
         # Should never reach here, but just in case
         raise Exception("Unexpected error: retry loop completed without returning")
+
+    def _debug_dump_messages(self, messages_for_llm: List[Dict], error_str: str) -> None:
+        """Dump full message contents for debugging API errors like -4003 / InvalidParameter."""
+        logger.error(f"=== Debug: Messages dump for error: {error_str[:200]} ===")
+        logger.error(f"Total messages: {len(messages_for_llm)}")
+        for idx, msg in enumerate(messages_for_llm):
+            role = msg.get("role", "unknown")
+            content = msg.get("content")
+            tool_call_id = msg.get("tool_call_id", None)
+
+            # Flag empty / None content
+            if content is None:
+                logger.error(f"Message {idx} [{role}]: ⚠️ content is None!")
+                if tool_call_id:
+                    logger.error(f"  tool_call_id={tool_call_id}, name={msg.get('name', 'N/A')}")
+                continue
+            if isinstance(content, str) and content.strip() == "":
+                logger.error(f"Message {idx} [{role}]: ⚠️ content is EMPTY string! (len={len(content)})")
+                if tool_call_id:
+                    logger.error(f"  tool_call_id={tool_call_id}, name={msg.get('name', 'N/A')}")
+                continue
+            if isinstance(content, list) and len(content) == 0:
+                logger.error(f"Message {idx} [{role}]: ⚠️ content is EMPTY list!")
+                continue
+
+            if isinstance(content, list):
+                logger.error(f"Message {idx} [{role}]: (multimodal, {len(content)} items)")
+                for item_idx, item in enumerate(content):
+                    item_type = item.get("type", "unknown")
+                    if item_type == "image_url":
+                        image_url = item.get("image_url", {})
+                        if isinstance(image_url, dict):
+                            url = image_url.get("url", "")
+                        else:
+                            url = str(image_url)
+                        logger.error(f"  Item {item_idx} [image_url]: {url[:200]}...")
+                        if url.startswith("data:"):
+                            try:
+                                if "," in url:
+                                    header, b64_data = url.split(",", 1)
+                                    logger.error(f"    -> Header: {header}, Base64 length: {len(b64_data)}")
+                                    if len(b64_data) < 100:
+                                        logger.error(f"    -> WARNING: Base64 data too short!")
+                                    import base64 as b64_module
+                                    try:
+                                        decoded = b64_module.b64decode(b64_data)
+                                        logger.error(f"    -> Decoded size: {len(decoded)} bytes, First 20 bytes: {decoded[:20]}")
+                                        if decoded[:20].strip().lower().startswith((b'<!doctype', b'<html', b'<head', b'<?xml')):
+                                            logger.error(f"    -> ERROR: Decoded content is HTML, not an image!")
+                                    except Exception as decode_err:
+                                        logger.error(f"    -> ERROR: Failed to decode base64: {decode_err}")
+                                else:
+                                    logger.error(f"    -> WARNING: No comma found in data URL")
+                            except Exception as parse_err:
+                                logger.error(f"    -> ERROR parsing data URL: {parse_err}")
+                        elif not url.startswith("http"):
+                            logger.error(f"    -> WARNING: URL doesn't start with http or data: scheme")
+                    elif item_type == "text":
+                        text = item.get("text", "")
+                        if not text or text.strip() == "":
+                            logger.error(f"  Item {item_idx} [text]: ⚠️ EMPTY text item!")
+                        else:
+                            logger.error(f"  Item {item_idx} [text]: {text[:300]}...")
+                    else:
+                        logger.error(f"  Item {item_idx} [{item_type}]: {str(item)[:200]}...")
+            else:
+                content_preview = str(content)[:1000] if len(str(content)) > 1000 else str(content)
+                logger.error(f"Message {idx} [{role}]: {content_preview}")
+
+            # Log tool_calls if present on assistant messages
+            if role == "assistant" and msg.get("tool_calls"):
+                tc_list = msg["tool_calls"]
+                logger.error(f"  tool_calls ({len(tc_list)}): {[tc.get('id', tc.get('function', {}).get('name', 'N/A')) for tc in tc_list]}")
+
+        logger.error("=== End Debug ===")
 
     def process_llm_response(
         self, llm_response: Any, message_history: List[Dict], agent_type: str = "main"
@@ -440,50 +502,28 @@ class OpenAIClient(BaseClient):
             assistant_response_text = message.content or ""
             tool_calls = message.tool_calls
             
-            # Build assistant message with tool_calls for message history
-            # Try to use the original message object's dict representation for better compatibility
-            try:
-                # OpenAI SDK objects have model_dump() method
-                if hasattr(message, 'model_dump'):
-                    assistant_message = message.model_dump(exclude_unset=True)
-                elif hasattr(message, 'dict'):
-                    assistant_message = message.dict(exclude_unset=True)
-                else:
-                    # Fallback to manual construction
-                    assistant_message = {
-                        "role": "assistant",
-                        "content": assistant_response_text,
-                    }
-                    if tool_calls:
-                        assistant_message["tool_calls"] = [
-                            {
-                                "id": tc.id,
-                                "type": tc.type,
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                }
-                            }
-                            for tc in tool_calls
-                        ]
-            except Exception as e:
-                logger.warning(f"Failed to dump message object: {e}, using manual construction")
-                assistant_message = {
-                    "role": "assistant",
-                    "content": assistant_response_text,
-                }
-                if tool_calls:
-                    assistant_message["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": tc.type,
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            }
+            # Explicitly construct the dict to guarantee tool_calls are
+            # preserved.  model_dump(exclude_unset=True) can silently drop
+            # tool_calls depending on SDK version / proxy behaviour, leaving
+            # an assistant message with only empty content and triggering
+            # -4003 on the next API call.
+            # Ref: Seed1.8 cookbook directly appends the raw response dict.
+            assistant_message = {
+                "role": "assistant",
+                "content": assistant_response_text,
+            }
+            if tool_calls:
+                assistant_message["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
                         }
-                        for tc in tool_calls
-                    ]
+                    }
+                    for tc in tool_calls
+                ]
             
             # Preserve reasoning_content for multi-turn conversation context
             if reasoning_content:
@@ -904,12 +944,12 @@ class OpenAIClient(BaseClient):
                 "Context limit reached, proceeding to step back and summarize the conversation",
             )
 
-            # Remove the last user/tool message (tool call results)
-            if message_history[-1]["role"] in ("user", "tool"):
+            # Remove all trailing tool/user messages (tool call results)
+            while message_history and message_history[-1]["role"] in ("user", "tool"):
                 message_history.pop()
 
-            # Remove the second-to-last assistant message (tool call request)
-            if message_history[-1]["role"] == "assistant":
+            # Remove the assistant message with tool_calls that preceded them
+            if message_history and message_history[-1]["role"] == "assistant":
                 message_history.pop()
 
             self.task_log.log_step(
