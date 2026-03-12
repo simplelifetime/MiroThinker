@@ -87,8 +87,8 @@ class OpenAIClient(BaseClient):
     def _update_token_usage(self, usage_data: Any) -> None:
         """Update cumulative token usage"""
         if usage_data:
-            input_tokens = getattr(usage_data, "prompt_tokens", 0)
-            output_tokens = getattr(usage_data, "completion_tokens", 0)
+            input_tokens = getattr(usage_data, "prompt_tokens", 0) or 0
+            output_tokens = getattr(usage_data, "completion_tokens", 0) or 0
             prompt_tokens_details = getattr(usage_data, "prompt_tokens_details", None)
             if prompt_tokens_details:
                 cached_tokens = (
@@ -216,6 +216,22 @@ class OpenAIClient(BaseClient):
                     response = self.client.chat.completions.create(**params)
                 # Update token count
                 self._update_token_usage(getattr(response, "usage", None))
+
+                # Fallback: if API returned None for token counts, estimate via tiktoken
+                usage = getattr(response, "usage", None)
+                if usage and getattr(usage, "prompt_tokens", None) is None:
+                    estimated_input = self._estimate_messages_tokens(messages_for_llm)
+                    resp_text = getattr(response.choices[0].message, "content", "") or ""
+                    estimated_output = self._estimate_tokens(resp_text)
+                    self.last_call_tokens = {
+                        "prompt_tokens": estimated_input,
+                        "completion_tokens": estimated_output,
+                    }
+                    logger.warning(
+                        f"API returned None for token counts, using tiktoken fallback: "
+                        f"input≈{estimated_input}, output≈{estimated_output}"
+                    )
+
                 self.task_log.log_step(
                     "info",
                     "LLM | Response Status",
@@ -406,6 +422,8 @@ class OpenAIClient(BaseClient):
         
         # Extract reasoning_content if present (for Kimi/DeepSeek thinking models)
         reasoning_content = getattr(message, "reasoning_content", None)
+        if not reasoning_content:
+            reasoning_content = getattr(message, "reasoning", None)
         
         # Extract LLM response text
         if finish_reason == "stop":
@@ -706,20 +724,43 @@ class OpenAIClient(BaseClient):
             try:
                 self.encoding = tiktoken.get_encoding("o200k_base")
             except Exception:
-                # If o200k_base is not available, use cl100k_base as fallback
-                self.encoding = tiktoken.get_encoding("cl100k_base")
+                try:
+                    self.encoding = tiktoken.get_encoding("cl100k_base")
+                except Exception:
+                    self.encoding = None
 
-        try:
-            return len(self.encoding.encode(text))
-        except Exception as e:
-            # If encoding fails, use simple estimation: approximately 1 token per 4 characters
-            self.task_log.log_step(
-                "error",
-                "LLM | Token Estimation Error",
-                f"Error: {str(e)}",
-            )
-            return len(text) // 4
-    
+        if self.encoding is not None:
+            try:
+                return len(self.encoding.encode(text))
+            except Exception as e:
+                self.task_log.log_step(
+                    "error",
+                    "LLM | Token Estimation Error",
+                    f"Error: {str(e)}",
+                )
+
+        return len(text) // 4
+
+    def _estimate_messages_tokens(self, messages: List[Dict]) -> int:
+        """Estimate total token count for a list of messages via tiktoken.
+        Used as fallback when the API doesn't report usage (e.g. some proxy endpoints).
+        """
+        total = 0
+        for m in messages:
+            total += 4  # per-message overhead
+            content = m.get("content", "")
+            if isinstance(content, list):
+                for item in content:
+                    if item.get("type") == "text":
+                        total += self._estimate_tokens(str(item.get("text", "")))
+                    elif item.get("type") == "image_url":
+                        image_url = item.get("image_url", {})
+                        url = image_url.get("url", "") if isinstance(image_url, dict) else str(image_url)
+                        total += self._estimate_image_tokens(url)
+            else:
+                total += self._estimate_tokens(str(content))
+        return total
+
     def _estimate_image_tokens(self, image_url: str) -> int:
         """
         Args:
