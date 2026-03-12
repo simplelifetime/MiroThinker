@@ -10,6 +10,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List
 
@@ -315,7 +316,7 @@ def _apihub_image_search(q: str, gl: str, hl: str, num: int) -> dict:
                         source, domain, link, position
     """
     sr_data = _make_global_search_request("ImageSearch", {
-        "search_request_list": [{"query": q.strip(), "thumbnail_size": "medium"}]
+        "search_request_list": [{"query": q.strip(), "thumbnail_size": "small"}]
     })
 
     images = []
@@ -357,6 +358,16 @@ def _apihub_image_search(q: str, gl: str, hl: str, num: int) -> dict:
     }
 
 
+_OSS_PUBLIC_TO_INTERNAL_RE = re.compile(
+    r"(\.oss-cn-[a-z]+)(\.)(?!internal)(aliyuncs\.com)"
+)
+
+
+def _to_oss_internal_url(url: str) -> str:
+    """Convert Alibaba Cloud OSS public endpoint to VPC-internal endpoint."""
+    return _OSS_PUBLIC_TO_INTERNAL_RE.sub(r"\1-internal\2\3", url)
+
+
 def _apihub_visual_search(image_url: str, gl: str, hl: str, num: int) -> dict:
     """
     Execute visual search via global_search_v2 VisualSearch.
@@ -365,8 +376,9 @@ def _apihub_visual_search(image_url: str, gl: str, hl: str, num: int) -> dict:
     Serper lens organic item: title, link, snippet, imageUrl, position
     """
     image_base64 = None
+    download_url = _to_oss_internal_url(image_url.strip())
     try:
-        resp = requests.get(image_url.strip(), timeout=30)
+        resp = requests.get(download_url, timeout=(5, 15))
         resp.raise_for_status()
         image_base64 = base64.b64encode(resp.content).decode("utf-8")
     except Exception as e:
@@ -378,7 +390,7 @@ def _apihub_visual_search(image_url: str, gl: str, hl: str, num: int) -> dict:
             "url": image_url.strip(),
             "region_of_interest": {"x_min": 0, "y_min": 0, "x_max": 1, "y_max": 1},
         },
-        "thumbnail_size": "medium",
+        "thumbnail_size": "small",
     }
     if image_base64:
         search_request["image_query"]["image_base64"] = image_base64
