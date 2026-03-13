@@ -308,6 +308,14 @@ async def zoom_in(
         if x + width > img_width or y + height > img_height:
             return f'[{{"error": "Your cropped region extends beyond image bounds (image size: {img_width}x{img_height}, your cropped region: ({x}+{width})x({y}+{height}))"}}]'
 
+        MIN_DIMENSION = 28
+        if width < MIN_DIMENSION or height < MIN_DIMENSION:
+            return (
+                f'[{{"error": "Cropped region is too small: {width}x{height} pixels. '
+                f'Each dimension must be at least {MIN_DIMENSION} pixels. '
+                f'Please select a larger region."}}]'
+            )
+
         # Crop the region
         box = (x, y, x + width, y + height)
         cropped = image.crop(box)
