@@ -114,8 +114,8 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
             "JINA_API_KEY": JINA_API_KEY,
             "JINA_BASE_URL": JINA_BASE_URL,
         }
-        # Pass through GOOGLE_SEARCH_PROXY, APIHUB_*, and GLOBAL_SEARCH_* if set
-        for key in ("GOOGLE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL", "GLOBAL_SEARCH_API_KEY"):
+        # Pass through GOOGLE_SEARCH_PROXY, IMAGE_SEARCH_PROXY, APIHUB_*, and GLOBAL_SEARCH_* if set
+        for key in ("GOOGLE_SEARCH_PROXY", "IMAGE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL", "GLOBAL_SEARCH_API_KEY"):
             if key in os.environ:
                 google_search_env[key] = os.environ[key]
         # Pass through MIROFLOW_SEARCH_CACHE_* if set

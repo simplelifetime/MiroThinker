@@ -103,6 +103,10 @@ SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
 # "serper" (default) or "api_hub"
 GOOGLE_SEARCH_PROXY = os.getenv("GOOGLE_SEARCH_PROXY", "serper")
 
+# Separate proxy for image_search / visual_search; defaults to GOOGLE_SEARCH_PROXY
+# so existing behaviour is preserved unless explicitly overridden.
+IMAGE_SEARCH_PROXY = os.getenv("IMAGE_SEARCH_PROXY", GOOGLE_SEARCH_PROXY)
+
 # APIHub configuration (only used when GOOGLE_SEARCH_PROXY=api_hub)
 APIHUB_URL = "https://gpt.bytedance.net/gpt/tool_hub/online/mcp_server/proxy/apihub_google_search/mcp"
 APIHUB_API_KEY = os.getenv("APIHUB_API_KEY", "")
@@ -376,13 +380,15 @@ def _apihub_visual_search(image_url: str, gl: str, hl: str, num: int) -> dict:
     Serper lens organic item: title, link, snippet, imageUrl, position
     """
     image_base64 = None
-    download_url = _to_oss_internal_url(image_url.strip())
-    try:
-        resp = requests.get(download_url, timeout=(5, 15))
-        resp.raise_for_status()
-        image_base64 = base64.b64encode(resp.content).decode("utf-8")
-    except Exception as e:
-        logger.warning(f"Failed to download image for visual search: {e}")
+    url = image_url.strip()
+    for download_url in (url, _to_oss_internal_url(url)):
+        try:
+            resp = requests.get(download_url, timeout=(5, 15))
+            resp.raise_for_status()
+            image_base64 = base64.b64encode(resp.content).decode("utf-8")
+            break
+        except Exception as e:
+            logger.warning(f"Failed to download image from {download_url}: {e}")
 
     search_request: Dict[str, Any] = {
         "query": "",
@@ -757,7 +763,7 @@ def image_search(
         return cached_result
 
     try:
-        if GOOGLE_SEARCH_PROXY == "api_hub":
+        if IMAGE_SEARCH_PROXY == "api_hub":
             data = _apihub_image_search(q, gl, hl, normalized_num)
         else:
             if not SERPER_API_KEY:
@@ -786,18 +792,11 @@ def image_search(
         result_json = json.dumps(data, ensure_ascii=False)
 
         # Cache the result with the same normalized parameters
-        # logger.info(f"[SEARCH_CACHE] image_search: calling cache.set for query='{q[:50]}...'")
         cache.set("image_search", q, result_json, **cache_params)
-        # if cache.enabled:
-        #     logger.info(f"[SEARCH_CACHE] image_search: cache.set completed, cache now has {len(cache._memory_cache)} entries")
-        # else:
-        #     logger.info(f"[SEARCH_CACHE] image_search: cache.set skipped (cache disabled)")
 
         # Immediately save to file after caching
         # This is necessary because each tool call runs in a separate process
         cache.save_to_file(force=True)
-        # if cache.enabled:
-        #     logger.info(f"[SEARCH_CACHE] image_search: saved cache to file")
 
         return result_json
 
@@ -852,7 +851,7 @@ def visual_search(
     try:
         requested_num = num if num is not None else 5
 
-        if GOOGLE_SEARCH_PROXY == "api_hub":
+        if IMAGE_SEARCH_PROXY == "api_hub":
             data = _apihub_visual_search(image_url, gl, hl, requested_num)
         else:
             if not SERPER_API_KEY:
