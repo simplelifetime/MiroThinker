@@ -202,6 +202,13 @@ class AnswerGenerator:
         failure_summary_history = message_history.copy()
         while failure_summary_history and failure_summary_history[-1]["role"] in ("user", "tool"):
             failure_summary_history.pop()
+        # Strip orphaned tool_calls from the last assistant message to prevent
+        # "tool result counts must be equal to tool call counts" API errors.
+        if (failure_summary_history and failure_summary_history[-1].get("role") == "assistant"
+                and failure_summary_history[-1].get("tool_calls")):
+            failure_summary_history[-1].pop("tool_calls", None)
+            if not failure_summary_history[-1].get("content"):
+                failure_summary_history[-1]["content"] = "I must generate a summary of the conversation."
 
         # Add failure summary prompt and assistant prefix for structured output
         failure_summary_history.append(
@@ -281,6 +288,13 @@ class AnswerGenerator:
 
         while message_history and message_history[-1]["role"] in ("user", "tool"):
             message_history.pop(-1)
+        # Strip orphaned tool_calls from the last assistant message to prevent
+        # "tool result counts must be equal to tool call counts" API errors.
+        if (message_history and message_history[-1].get("role") == "assistant"
+                and message_history[-1].get("tool_calls")):
+            message_history[-1].pop("tool_calls", None)
+            if not message_history[-1].get("content"):
+                message_history[-1]["content"] = "I must generate a summary of the conversation."
         message_history.append({"role": "user", "content": summary_prompt})
 
         final_answer_text = None

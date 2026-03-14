@@ -682,6 +682,13 @@ class Orchestrator:
 
         while message_history and message_history[-1]["role"] in ("user", "tool"):
             message_history.pop()
+        # Strip orphaned tool_calls from the last assistant message to prevent
+        # "tool result counts must be equal to tool call counts" API errors.
+        if (message_history and message_history[-1].get("role") == "assistant"
+                and message_history[-1].get("tool_calls")):
+            message_history[-1].pop("tool_calls", None)
+            if not message_history[-1].get("content"):
+                message_history[-1]["content"] = "I must generate a summary of the conversation."
         message_history.append({"role": "user", "content": summary_prompt})
 
         await self.stream.tool_call(
