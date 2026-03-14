@@ -769,9 +769,14 @@ class Orchestrator:
             "info", "Main Agent", f"Task description: {task_description}"
         )
         if task_file_name:
-            self.task_log.log_step(
-                "info", "Main Agent", f"Associated file: {task_file_name}"
-            )
+            if isinstance(task_file_name, list):
+                self.task_log.log_step(
+                    "info", "Main Agent", f"Associated files ({len(task_file_name)}): {task_file_name}"
+                )
+            else:
+                self.task_log.log_step(
+                    "info", "Main Agent", f"Associated file: {task_file_name}"
+                )
 
         # Process input
         updated_task_description, initial_user_content = process_input(
@@ -782,7 +787,10 @@ class Orchestrator:
         # Record initial user input
         user_input = updated_task_description
         if task_file_name:
-            user_input += f"\n[Attached file: {task_file_name}]"
+            if isinstance(task_file_name, list):
+                user_input += f"\n[Attached files: {', '.join(task_file_name)}]"
+            else:
+                user_input += f"\n[Attached file: {task_file_name}]"
 
         # Get tool definitions
         if not self.tool_definitions:

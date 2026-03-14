@@ -14,7 +14,7 @@ and the orchestrator to execute complex multi-turn agent tasks.
 
 import traceback
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from miroflow_tools.manager import ToolManager
 from omegaconf import DictConfig
@@ -36,7 +36,7 @@ async def execute_task_pipeline(
     cfg: DictConfig,
     task_id: str,
     task_description: str,
-    task_file_name: str,
+    task_file_name: Union[str, List[str], None],
     main_agent_tool_manager: ToolManager,
     sub_agent_tool_managers: Dict[str, ToolManager],
     output_formatter: OutputFormatter,
