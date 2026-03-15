@@ -199,7 +199,7 @@ async def verify_answer_hle(question: str, target: str, predicted_answer: str) -
 
     try:
         response = await evaluation_llm_client.beta.chat.completions.parse(
-            model="o3-mini-2025-01-31",
+            model=EVAL_MODEL,
             max_completion_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
             response_format=HLEExtractedAnswer,
@@ -375,7 +375,7 @@ async def verify_answer_gaia_validation_text_103(
         question=question, correct_answer=target, response=predicted_answer
     )
 
-    max_tries = 10
+    max_tries = 100
     for attempt in range(max_tries):
         try:
             response = await evaluation_llm_client.chat.completions.create(
@@ -389,8 +389,9 @@ async def verify_answer_gaia_validation_text_103(
             if response:
                 break
         except Exception as e:
+            print(f"[Attempt {attempt + 1}/{max_tries}] GAIA validation LLM call failed: {e}")
             if attempt == (max_tries - 1):
-                raise e
+                return "NOT_ATTEMPTED"
 
     # Use case-insensitive matching and strip whitespace/punctuation
     content_normalized = content.strip().rstrip(".").lower()
@@ -588,7 +589,7 @@ async def verify_answer_browsecomp(
 
     except Exception as e:
         print(f"BrowseComp evaluation failed: {e}")
-        raise e
+        return "NOT_ATTEMPTED"
 
 
 async def verify_answer_browsecomp_zh(
@@ -628,7 +629,7 @@ async def verify_answer_browsecomp_zh(
 
     except Exception as e:
         print(f"BrowseComp-ZH evaluation failed: {e}")
-        raise e
+        return "NOT_ATTEMPTED"
 
 
 # ================================================
@@ -965,7 +966,7 @@ async def _verify_answer_for_datasets_core(
         return result, "gaia_validation_text_103_judge", None
 
     # For browsecomp (English) and browsecomp-zh (Chinese), use different judges
-    elif benchmark_name in ["browsecomp", "mmbc", "redsearch_mm", "redsearch_text", "fvqa", "inhouse_news", "livevqa_news", "livevqa_paper", "voyager", "deepdive", "webshaper"]:
+    elif benchmark_name in ["browsecomp", "mmbc", "redsearch_mm", "redsearch_text", "fvqa", "inhouse_news", "livevqa_news", "livevqa_paper", "voyager", "deepdive", "webshaper", "bcvl", "mmsearch", "mmsearch_plus", "VDR"]:
         result = await verify_answer_browsecomp(question, target, predicted_answer)
         return result, "browsecomp_judge", None
 
@@ -1019,7 +1020,7 @@ async def verify_answer_for_datasets(
     target: str,
     predicted_answer: str,
     metadata: Optional[Dict[str, Any]] = None,
-    max_retries: int = 10,
+    max_retries: int = 100,
     retry_interval: int = 5,
 ) -> tuple[str, str, Optional[Dict[str, Any]]]:
     """
@@ -1039,9 +1040,16 @@ async def verify_answer_for_datasets(
         details_dict contains evaluation details (for DeepSearchQA) or None (for other benchmarks).
     """
     for attempt in range(1, max_retries + 1):
-        result, judge_type, details = await _verify_answer_for_datasets_core(
-            benchmark_name, question, target, predicted_answer, metadata
-        )
+        try:
+            result, judge_type, details = await _verify_answer_for_datasets_core(
+                benchmark_name, question, target, predicted_answer, metadata
+            )
+        except Exception as e:
+            print(
+                f"[Retry {attempt}/{max_retries}] Evaluation raised exception: {e}"
+            )
+            result, judge_type, details = "NOT_ATTEMPTED", "exception", None
+
         if result != "NOT_ATTEMPTED":
             return result, judge_type, details
         if attempt < max_retries:
@@ -1050,6 +1058,5 @@ async def verify_answer_for_datasets(
             )
             await asyncio.sleep(retry_interval)
 
-    # still NOT_ATTEMPTED after retries
     print(f"All {max_retries} attempts resulted in NOT_ATTEMPTED.")
     return "NOT_ATTEMPTED", "retry_wrapper", None
