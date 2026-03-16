@@ -464,7 +464,102 @@ Please provide a concise summary of the relevant information from the video that
         return ""
 
 
-def process_input(task_description: str, task_file_name: str) -> Tuple[str, Union[str, list]]:
+def _process_single_image(image_path: str, task_description: str) -> Tuple[dict, str, str]:
+    """
+    Process a single image file: encode, upload, and generate caption.
+
+    Returns:
+        Tuple of (image_content_dict, text_description, file_content_section)
+    """
+    display_filename = os.path.basename(image_path)
+
+    image_base64 = encode_image_to_base64(image_path)
+    if not image_base64:
+        print(f"Error: Failed to encode image {image_path}")
+        image_base64 = ""
+
+    mime_type = get_image_mime_type(image_path)
+    image_base64_with_mime = f"data:{mime_type};base64,{image_base64}"
+
+    oss_uploader = OSSUploader()
+    image_url = oss_uploader.upload(image_path, byte=False)
+
+    description = generate_simple_image_caption(image_path, task_description)
+
+    image_content, text_description = format_image_for_context(
+        image_base64_with_mime, image_url, description
+    )
+
+    file_content_section = f"\n\nNote: An image file '{display_filename}' is associated with this task. "
+    file_content_section += f"The image has been included in the context for direct visual analysis.\n\n"
+    file_content_section += f"## Image Content\n"
+    file_content_section += f"File: {display_filename}\n"
+    file_content_section += f"{text_description}\n\n"
+
+    return image_content, text_description, file_content_section
+
+
+def _process_multiple_images(task_description: str, file_paths: list) -> Tuple[str, Union[str, list]]:
+    """
+    Process multiple image files and build a multi-modal content list.
+
+    Args:
+        task_description: The original task description
+        file_paths: List of image file paths
+
+    Returns:
+        Tuple of (updated_task_description, initial_user_content)
+    """
+    updated_task_description = task_description
+    file_content_section = ""
+    image_contents = []
+    text_descriptions = []
+
+    valid_paths = [fp for fp in file_paths if fp]
+    display_names = [os.path.basename(fp) for fp in valid_paths]
+
+    for image_path in valid_paths:
+        file_extension = image_path.rsplit(".", maxsplit=1)[-1].lower()
+        if file_extension not in IMAGE_EXTENSIONS:
+            print(f"Warning: Skipping non-image file in multi-file list: {image_path}")
+            continue
+
+        try:
+            image_content, text_description, section = _process_single_image(
+                image_path, task_description
+            )
+            image_contents.append(image_content)
+            text_descriptions.append(text_description)
+            file_content_section += section
+        except Exception as e:
+            print(f"Error: Failed to process image {image_path}: {e}")
+            traceback.print_exc()
+
+    updated_task_description += "\nYou should follow the format instruction in the request strictly and wrap the final answer in \\boxed{}."
+    updated_task_description += file_content_section
+    updated_task_description = updated_task_description.strip()
+
+    if image_contents:
+        names_str = "', '".join(display_names)
+        all_text_desc = "\n".join(text_descriptions)
+
+        initial_user_content = [
+            {
+                "type": "text",
+                "text": f"{task_description}\n\n"
+                f"Note: {len(image_contents)} image files ('{names_str}') are associated with this task. "
+                f"The images are included below for direct visual analysis. "
+                f"You may use available tools to process their content if necessary.\n\n"
+                f"{all_text_desc}",
+            },
+        ] + image_contents
+
+        return updated_task_description, initial_user_content
+    else:
+        return updated_task_description, updated_task_description
+
+
+def process_input(task_description: str, task_file_name) -> Tuple[str, Union[str, list]]:
     """
     Process user input and associated files.
 
@@ -476,7 +571,8 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
 
     Args:
         task_description: The original task description
-        task_file_name: Path to an associated file, or empty string if none
+        task_file_name: Path to an associated file (str), a list of file paths,
+                        or empty string / None if none
 
     Returns:
         Tuple of (updated_task_description, initial_user_content)
@@ -484,6 +580,10 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
         - initial_user_content: Either a string (for non-image files) or a list
           (for image files) containing mixed content for multi-modal models
     """
+    # Handle multiple files (list of image paths)
+    if isinstance(task_file_name, list):
+        return _process_multiple_images(task_description, task_file_name)
+
     updated_task_description = task_description
     file_content_section = ""  # Collect file content to append at the end
     initial_user_content = None  # Will be set for images to support multi-modal
@@ -496,34 +596,10 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
             parsing_result = None
 
             if file_extension in IMAGE_EXTENSIONS:
-                # Process image for multi-modal support
-                # Encode image to base64
-                image_base64 = encode_image_to_base64(task_file_name)
-                if not image_base64:
-                    print(f"Error: Failed to encode image {task_file_name}")
-                    image_base64 = ""
-
-                # Get MIME type
-                mime_type = get_image_mime_type(task_file_name)
-                image_base64_with_mime = f"data:{mime_type};base64,{image_base64}"
-
-                # Upload to OSS to get URL
-                oss_uploader = OSSUploader()
-                image_url = oss_uploader.upload(task_file_name, byte=False)
-
-                # Generate simple caption
-                description = generate_simple_image_caption(
-                    task_file_name, task_description
+                image_content, text_description, file_content_section = (
+                    _process_single_image(task_file_name, task_description)
                 )
 
-                # Format for multi-modal context
-                image_content, text_description = format_image_for_context(
-                    image_base64_with_mime, image_url, description
-                )
-
-                # Create multi-modal content list
-                # This format is compatible with OpenAI API and similar interfaces
-                # Use only basename to hide full path
                 display_filename = os.path.basename(task_file_name)
                 initial_user_content = [
                     {
@@ -536,13 +612,6 @@ def process_input(task_description: str, task_file_name: str) -> Tuple[str, Unio
                     },
                     image_content,
                 ]
-
-                # Also update updated_task_description for backward compatibility
-                file_content_section += f"\n\nNote: An image file '{display_filename}' is associated with this task. "
-                file_content_section += f"The image has been included in the context for direct visual analysis.\n\n"
-                file_content_section += f"## Image Content\n"
-                file_content_section += f"File: {display_filename}\n"
-                file_content_section += f"{text_description}\n\n"
 
             elif file_extension == "py":
                 # Python files - read directly

@@ -965,7 +965,7 @@ async def _verify_answer_for_datasets_core(
         return result, "gaia_validation_text_103_judge", None
 
     # For browsecomp (English) and browsecomp-zh (Chinese), use different judges
-    elif benchmark_name == "browsecomp" or benchmark_name == "mmbc":
+    elif benchmark_name in ["browsecomp", "mmbc", "redsearch_mm", "redsearch_text", "fvqa", "inhouse_news", "livevqa_news", "livevqa_paper", "voyager", "deepdive", "webshaper"]:
         result = await verify_answer_browsecomp(question, target, predicted_answer)
         return result, "browsecomp_judge", None
 

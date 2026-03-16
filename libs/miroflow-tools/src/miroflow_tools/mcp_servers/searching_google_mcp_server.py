@@ -20,6 +20,7 @@ SERPER_API_KEY = os.environ.get("SERPER_API_KEY", "")
 SERPER_BASE_URL = os.environ.get("SERPER_BASE_URL", "https://google.serper.dev")
 JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
 JINA_BASE_URL = os.environ.get("JINA_BASE_URL", "https://r.jina.ai")
+GOOGLE_SEARCH_PROXY = os.environ.get("GOOGLE_SEARCH_PROXY", "serper")
 
 # Google search result filtering environment variables
 REMOVE_SNIPPETS = os.environ.get("REMOVE_SNIPPETS", "").lower() in ("true", "1", "yes")
@@ -106,9 +107,10 @@ async def google_search(
     Returns:
         The search results.
     """
-    if SERPER_API_KEY == "":
+    if GOOGLE_SEARCH_PROXY != "api_hub" and SERPER_API_KEY == "":
         return (
-            "[ERROR]: SERPER_API_KEY is not set, google_search tool is not available."
+            "[ERROR]: SERPER_API_KEY is not set and GOOGLE_SEARCH_PROXY is not 'api_hub', "
+            "google_search tool is not available."
         )
 
     tool_name = "google_search"
@@ -129,7 +131,9 @@ async def google_search(
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
-    # Pass through MIROFLOW_SEARCH_CACHE_* and MIROFLOW_TASK_ID if set
+    for key in ("GOOGLE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL"):
+        if key in os.environ:
+            server_env[key] = os.environ[key]
     if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
         server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
     if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
@@ -159,7 +163,8 @@ async def google_search(
     result_content = ""
 
     retry_count = 0
-    max_retries = 3
+    max_retries = 5
+    last_error = None
 
     while retry_count < max_retries:
         try:
@@ -178,14 +183,32 @@ async def google_search(
                         result_content is not None and result_content.strip() != ""
                     ), "Empty result from google_search tool, please try again."
                     # Apply filtering based on environment variables
+                    try:
+                        result_json = json.loads(result_content)
+                        if isinstance(result_json, dict) and result_json.get("success") is False:
+                            error_msg = result_json.get("error", "Unknown error")
+                            raise RuntimeError(
+                                f"google_search returned failure: {error_msg}"
+                            )
+                    except json.JSONDecodeError:
+                        pass
                     filtered_result = filter_google_search_result(result_content)
                     return filtered_result  # Success, exit retry loop
         except Exception as error:
+            last_error = error
             retry_count += 1
             if retry_count >= max_retries:
-                return f"[ERROR]: google_search tool execution failed after {max_retries} attempts: {str(error)}"
-            # Wait before retrying
-            await asyncio.sleep(min(2**retry_count, 60))
+                return (
+                    f"[ERROR]: google_search tool execution failed after "
+                    f"{max_retries} attempts: {str(last_error)}"
+                )
+            wait_time = min(2**retry_count, 60)
+            print(
+                f"[WARN] google_search attempt {retry_count}/{max_retries} failed: "
+                f"{str(error)}, retrying in {wait_time}s...",
+                file=sys.stderr,
+            )
+            await asyncio.sleep(wait_time)
 
     return "[ERROR]: Unknown error occurred in google_search tool, please try again."
 
@@ -693,9 +716,10 @@ async def scholar_search(
     Returns:
         The scholarly search results.
     """
-    if SERPER_API_KEY == "":
+    if GOOGLE_SEARCH_PROXY != "api_hub" and SERPER_API_KEY == "":
         return (
-            "[ERROR]: SERPER_API_KEY is not set, scholar_search tool is not available."
+            "[ERROR]: SERPER_API_KEY is not set and GOOGLE_SEARCH_PROXY is not 'api_hub', "
+            "scholar_search tool is not available."
         )
 
     tool_name = "scholar_search"
@@ -711,7 +735,9 @@ async def scholar_search(
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
-    # Pass through MIROFLOW_SEARCH_CACHE_* and MIROFLOW_TASK_ID if set
+    for key in ("GOOGLE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL"):
+        if key in os.environ:
+            server_env[key] = os.environ[key]
     if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
         server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
     if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
@@ -807,7 +833,9 @@ async def image_search(
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
-    # Pass through MIROFLOW_SEARCH_CACHE_* and MIROFLOW_TASK_ID if set
+    for key in ("GOOGLE_SEARCH_PROXY", "IMAGE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL", "GLOBAL_SEARCH_API_KEY"):
+        if key in os.environ:
+            server_env[key] = os.environ[key]
     if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
         server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
     if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:
@@ -903,7 +931,9 @@ async def visual_search(
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
-    # Pass through MIROFLOW_SEARCH_CACHE_* and MIROFLOW_TASK_ID if set
+    for key in ("GOOGLE_SEARCH_PROXY", "IMAGE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL", "GLOBAL_SEARCH_API_KEY"):
+        if key in os.environ:
+            server_env[key] = os.environ[key]
     if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
         server_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
     if "MIROFLOW_SEARCH_CACHE_PATH" in os.environ:

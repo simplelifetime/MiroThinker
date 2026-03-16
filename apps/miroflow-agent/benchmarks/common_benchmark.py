@@ -971,16 +971,21 @@ class GenericEvaluator(BenchmarkEvaluator):
 
         Returns:
             Tuple of (task_description, task_file_path)
+            task_file_path can be a single string or a list of strings for multi-image tasks
         """
 
         task_file_path = None
         if task.file_path:
-            # Build complete file path: data directory + relative path
-            full_file_path = self.data_dir / task.file_path
-            # Convert to absolute path and resolve any symbolic links
-            task_file_path = str(full_file_path.resolve())
-        else:
-            task_file_path = None
+            if isinstance(task.file_path, list):
+                resolved_paths = []
+                for fp in task.file_path:
+                    if fp:
+                        full_file_path = self.data_dir / fp
+                        resolved_paths.append(str(full_file_path.resolve()))
+                task_file_path = resolved_paths if len(resolved_paths) > 1 else (resolved_paths[0] if resolved_paths else None)
+            else:
+                full_file_path = self.data_dir / task.file_path
+                task_file_path = str(full_file_path.resolve())
 
         # Return task question and file path
         return task.task_question, task_file_path

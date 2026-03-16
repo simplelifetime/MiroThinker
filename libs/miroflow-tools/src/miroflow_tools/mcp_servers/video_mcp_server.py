@@ -134,8 +134,6 @@ def download_video_with_ytdlp(url: str, save_dir: Optional[str] = None) -> Tuple
             # Add retries for transient errors
             "retries": 3,
             "fragment_retries": 3,
-            # Enable JavaScript runtimes for YouTube extraction
-            "js_runtimes": ["node"],
         }
 
         # Add proxy if configured

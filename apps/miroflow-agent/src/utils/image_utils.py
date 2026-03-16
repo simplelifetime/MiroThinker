@@ -5,7 +5,7 @@
 Image processing utilities for multi-modal support.
 
 This module provides functions for:
-- Uploading images to Aliyun OSS
+- Uploading images to Aliyun OSS (with local HTTP server fallback)
 - Downloading and encoding images
 - Generating image descriptions for multi-modal context
 """
@@ -13,7 +13,13 @@ This module provides functions for:
 import base64
 import os
 import random
+import shutil
+import socket
 import string
+import tempfile
+import threading
+from functools import partial
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 from io import BytesIO
 from typing import Optional, Tuple
 
@@ -25,8 +31,76 @@ from PIL import Image
 load_dotenv()
 
 
+class _SilentHTTPHandler(SimpleHTTPRequestHandler):
+    """HTTP handler that suppresses access log output."""
+
+    def log_message(self, format, *args):
+        pass
+
+
+class LocalImageServer:
+    """
+    Singleton HTTP server for serving local images when OSS is unavailable.
+    Starts a background thread HTTP server and copies files to a serve directory.
+    """
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self.serve_dir = tempfile.mkdtemp(prefix="miroflow_images_")
+        self.port = self._find_free_port()
+        self._start_server()
+
+    def _find_free_port(self) -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+
+    def _start_server(self):
+        handler = partial(_SilentHTTPHandler, directory=self.serve_dir)
+        self.server = HTTPServer(("0.0.0.0", self.port), handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        print(f"Info: Local image server started on port {self.port}")
+
+    def serve_file(self, file_path: str) -> str:
+        """Copy a file to the serve directory and return its localhost URL."""
+        filename = os.path.basename(file_path)
+        random_prefix = "".join(
+            random.choices(string.ascii_lowercase + string.digits, k=8)
+        )
+        served_name = f"{random_prefix}_{filename}"
+        dest = os.path.join(self.serve_dir, served_name)
+        shutil.copy2(file_path, dest)
+        return f"http://localhost:{self.port}/{served_name}"
+
+    def serve_bytes(self, data: bytes, suffix: str = ".jpeg") -> str:
+        """Write bytes to the serve directory and return its localhost URL."""
+        random_prefix = "".join(
+            random.choices(string.ascii_lowercase + string.digits, k=8)
+        )
+        served_name = f"{random_prefix}{suffix}"
+        dest = os.path.join(self.serve_dir, served_name)
+        with open(dest, "wb") as f:
+            f.write(data)
+        return f"http://localhost:{self.port}/{served_name}"
+
+
 class OSSUploader:
-    """Handler for uploading images to Aliyun OSS."""
+    """Handler for uploading images to Aliyun OSS, with local HTTP server fallback."""
+
+    _oss_failed = False
 
     def __init__(self):
         """Initialize OSS uploader with credentials from environment variables."""
@@ -57,58 +131,78 @@ class OSSUploader:
         letters = string.ascii_letters + string.digits
         return "".join(random.choice(letters) for _ in range(length))
 
-    def upload(self, image, byte=False) -> Optional[str]:
-        """
-        Upload image to Aliyun OSS.
+    def _upload_to_oss(self, image, byte=False) -> Optional[str]:
+        """Attempt to upload to Aliyun OSS. Returns URL or None on failure."""
+        if OSSUploader._oss_failed:
+            return None
 
-        Args:
-            image: Image data (bytes or file path)
-            byte: Whether the input is in byte format
-
-        Returns:
-            Signed OSS URL (valid for 100 hours), or None if upload fails
-        """
         if not self.oss2:
-            print("Error: oss2 not available. Cannot upload to OSS.")
             return None
 
         if not self.access_key_id or not self.access_key_secret:
-            print("Error: OSS credentials not configured.")
             return None
 
         try:
             image_name = f"{self.generate_random_string()}.jpeg"
             target_path = f"zhili.zl/qwenvl_rft/image/{image_name}"
 
-            # Check file size
             if byte:
                 image_bytes = BytesIO(image)
                 image_size = image_bytes.getbuffer().nbytes
             else:
                 image_size = os.path.getsize(image)
 
-            # Skip small files (< 1KB)
             if image_size <= 1024:
                 print("Info: Image size too small (< 1KB), skipping upload.")
                 return None
 
-            # Authenticate and create bucket
             auth = self.oss2.Auth(self.access_key_id, self.access_key_secret)
             bucket = self.oss2.Bucket(auth, self.endpoint, self.bucket_name)
 
-            # Upload
             if byte:
                 bucket.put_object(target_path, image_bytes.getvalue())
             else:
                 bucket.put_object_from_file(target_path, image)
 
-            # Generate signed URL (valid for 100 hours)
             file_url = bucket.sign_url("GET", target_path, 360000)
             return file_url
 
         except Exception as e:
-            print(f"Error: Failed to upload image to OSS: {str(e)}")
+            print(f"Warning: OSS upload failed: {str(e)}")
+            OSSUploader._oss_failed = True
+            print("Info: OSS marked as unavailable; subsequent uploads will use local server directly.")
             return None
+
+    def _upload_via_local_server(self, image, byte=False) -> Optional[str]:
+        """Fallback: serve image via a local HTTP server."""
+        try:
+            server = LocalImageServer()
+            if byte:
+                return server.serve_bytes(image)
+            else:
+                return server.serve_file(image)
+        except Exception as e:
+            print(f"Error: Local image server fallback also failed: {str(e)}")
+            return None
+
+    def upload(self, image, byte=False) -> Optional[str]:
+        """
+        Upload image to get an HTTP URL. Tries OSS first, then falls back
+        to a local HTTP server.
+
+        Args:
+            image: Image data (bytes or file path)
+            byte: Whether the input is in byte format
+
+        Returns:
+            Image URL (OSS signed URL or localhost URL), or None if all methods fail
+        """
+        url = self._upload_to_oss(image, byte=byte)
+        if url:
+            return url
+
+        print("Info: Falling back to local image server...")
+        return self._upload_via_local_server(image, byte=byte)
 
 
 def encode_image_to_base64(image_path: str) -> Optional[str]:

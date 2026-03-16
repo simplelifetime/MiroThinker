@@ -174,6 +174,7 @@ class Orchestrator:
         self.task_log.main_agent_message_history = {
             "system_prompt": system_prompt,
             "message_history": message_history,
+            "tool_definitions": self._current_tool_definitions,
         }
         self.task_log.save()
 
@@ -679,8 +680,15 @@ class Orchestrator:
             agent_type=sub_agent_name,
         )
 
-        if message_history[-1]["role"] in ("user", "tool"):
+        while message_history and message_history[-1]["role"] in ("user", "tool"):
             message_history.pop()
+        # Strip orphaned tool_calls from the last assistant message to prevent
+        # "tool result counts must be equal to tool call counts" API errors.
+        if (message_history and message_history[-1].get("role") == "assistant"
+                and message_history[-1].get("tool_calls")):
+            message_history[-1].pop("tool_calls", None)
+            if not message_history[-1].get("content"):
+                message_history[-1]["content"] = "I must generate a summary of the conversation."
         message_history.append({"role": "user", "content": summary_prompt})
 
         await self.stream.tool_call(
@@ -721,7 +729,11 @@ class Orchestrator:
         # Save session history
         self.task_log.sub_agent_message_history_sessions[
             self.task_log.current_sub_agent_session_id
-        ] = {"system_prompt": system_prompt, "message_history": message_history}
+        ] = {
+            "system_prompt": system_prompt,
+            "message_history": message_history,
+            "tool_definitions": tool_definitions,
+        }
 
         self.task_log.save()
         self.task_log.end_sub_agent_session(sub_agent_name)
@@ -757,9 +769,14 @@ class Orchestrator:
             "info", "Main Agent", f"Task description: {task_description}"
         )
         if task_file_name:
-            self.task_log.log_step(
-                "info", "Main Agent", f"Associated file: {task_file_name}"
-            )
+            if isinstance(task_file_name, list):
+                self.task_log.log_step(
+                    "info", "Main Agent", f"Associated files ({len(task_file_name)}): {task_file_name}"
+                )
+            else:
+                self.task_log.log_step(
+                    "info", "Main Agent", f"Associated file: {task_file_name}"
+                )
 
         # Process input
         updated_task_description, initial_user_content = process_input(
@@ -770,7 +787,10 @@ class Orchestrator:
         # Record initial user input
         user_input = updated_task_description
         if task_file_name:
-            user_input += f"\n[Attached file: {task_file_name}]"
+            if isinstance(task_file_name, list):
+                user_input += f"\n[Attached files: {', '.join(task_file_name)}]"
+            else:
+                user_input += f"\n[Attached file: {task_file_name}]"
 
         # Get tool definitions
         if not self.tool_definitions:
@@ -790,6 +810,9 @@ class Orchestrator:
                 "Main Agent | Tool Definitions",
                 "Warning: No tool definitions found. LLM cannot use any tools.",
             )
+
+        # Store tool_definitions for use in _save_message_history callback
+        self._current_tool_definitions = tool_definitions
 
         # Generate system prompt
         system_prompt = self.llm_client.generate_agent_system_prompt(
@@ -1114,6 +1137,7 @@ class Orchestrator:
             self.task_log.main_agent_message_history = {
                 "system_prompt": system_prompt,
                 "message_history": message_history,
+                "tool_definitions": tool_definitions,
             }
             self.task_log.save()
 
@@ -1132,6 +1156,7 @@ class Orchestrator:
             self.task_log.main_agent_message_history = {
                 "system_prompt": system_prompt,
                 "message_history": message_history,
+                "tool_definitions": tool_definitions,
             }
             self.task_log.save()
 

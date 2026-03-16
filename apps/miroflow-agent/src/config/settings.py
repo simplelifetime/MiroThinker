@@ -64,11 +64,14 @@ SUMMARY_LLM_API_KEY = os.environ.get("SUMMARY_LLM_API_KEY")
 SUMMARY_LLM_BASE_URL = os.environ.get("SUMMARY_LLM_BASE_URL")
 SUMMARY_LLM_MODEL_NAME = os.environ.get("SUMMARY_LLM_MODEL_NAME")
 
-# API for Video Analysis
-VIDEO_API_KEY = os.environ.get("VIDEO_API_KEY")
-VIDEO_BASE_URL = os.environ.get("VIDEO_BASE_URL")
-VIDEO_MODEL_NAME = os.environ.get("VIDEO_MODEL_NAME")
-VIDEO_PROXY = os.environ.get("VIDEO_PROXY")
+# Proxy environment variables to forward to MCP server subprocesses.
+# StdioServerParameters.env replaces (not inherits) the parent environment,
+# so proxy vars must be passed explicitly for subprocesses to reach the internet.
+_PROXY_ENV = {
+    k: v
+    for k, v in os.environ.items()
+    if k.lower() in ("http_proxy", "https_proxy", "no_proxy", "all_proxy")
+}
 
 
 # MCP server configuration generation function
@@ -96,18 +99,25 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
         agent_cfg.get("tools", None) is not None
         and "tool-google-search" in agent_cfg["tools"]
     ):
-        if not SERPER_API_KEY:
+        google_search_proxy = os.environ.get("GOOGLE_SEARCH_PROXY", "serper")
+        if google_search_proxy != "api_hub" and not SERPER_API_KEY:
             raise ValueError(
-                "SERPER_API_KEY not set, tool-google-search will be unavailable."
+                "SERPER_API_KEY not set and GOOGLE_SEARCH_PROXY is not 'api_hub', "
+                "tool-google-search will be unavailable."
             )
 
         # Prepare environment variables for google search MCP server
         google_search_env = {
-            "SERPER_API_KEY": SERPER_API_KEY,
+            **_PROXY_ENV,
+            "SERPER_API_KEY": SERPER_API_KEY or "",
             "SERPER_BASE_URL": SERPER_BASE_URL,
             "JINA_API_KEY": JINA_API_KEY,
             "JINA_BASE_URL": JINA_BASE_URL,
         }
+        # Pass through GOOGLE_SEARCH_PROXY, IMAGE_SEARCH_PROXY, APIHUB_*, and GLOBAL_SEARCH_* if set
+        for key in ("GOOGLE_SEARCH_PROXY", "IMAGE_SEARCH_PROXY", "APIHUB_API_KEY", "APIHUB_USER_EMAIL", "GLOBAL_SEARCH_API_KEY"):
+            if key in os.environ:
+                google_search_env[key] = os.environ[key]
         # Pass through MIROFLOW_SEARCH_CACHE_* if set
         if "MIROFLOW_SEARCH_CACHE_ENABLED" in os.environ:
             google_search_env["MIROFLOW_SEARCH_CACHE_ENABLED"] = os.environ["MIROFLOW_SEARCH_CACHE_ENABLED"]
@@ -145,6 +155,7 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
                         "miroflow_tools.mcp_servers.searching_sogou_mcp_server",
                     ],
                     env={
+                        **_PROXY_ENV,
                         "TENCENTCLOUD_SECRET_ID": TENCENTCLOUD_SECRET_ID,
                         "TENCENTCLOUD_SECRET_KEY": TENCENTCLOUD_SECRET_KEY,
                         "JINA_API_KEY": JINA_API_KEY,
@@ -317,6 +328,7 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
                         "miroflow_tools.dev_mcp_servers.search_and_scrape_webpage",
                     ],
                     env={
+                        **_PROXY_ENV,
                         "SERPER_API_KEY": SERPER_API_KEY,
                         "SERPER_BASE_URL": SERPER_BASE_URL,
                         "TENCENTCLOUD_SECRET_ID": TENCENTCLOUD_SECRET_ID,
@@ -340,6 +352,7 @@ def create_mcp_server_parameters(cfg: DictConfig, agent_cfg: DictConfig, task_id
                         "miroflow_tools.dev_mcp_servers.jina_scrape_llm_summary",
                     ],
                     env={
+                        **_PROXY_ENV,
                         "JINA_API_KEY": JINA_API_KEY,
                         "JINA_BASE_URL": JINA_BASE_URL,
                         "SUMMARY_LLM_BASE_URL": SUMMARY_LLM_BASE_URL,
