@@ -20,6 +20,7 @@ Do NOT use these tools on images that the agent has not yet viewed.
 
 import base64
 import io
+import logging
 import os
 import random
 import string
@@ -31,6 +32,8 @@ from dotenv import load_dotenv
 from fastmcp import FastMCP
 from PIL import Image, ImageDraw
 
+logger = logging.getLogger(__name__)
+
 # Ensure .env file is loaded
 load_dotenv()
 
@@ -40,6 +43,8 @@ mcp = FastMCP("image-processing-server")
 # Constants
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
 SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+MIN_IMAGE_SIDE = 28
+MAX_IMAGE_SIDE = 2048
 
 
 class OSSUploader:
@@ -225,9 +230,27 @@ def download_image_from_url(image_url: str, timeout: int = 30) -> Tuple[Optional
         return None, f"[ERROR]: Unexpected error: {str(e)}"
 
 
+def _ensure_pil_image_dimensions(img: Image.Image) -> Image.Image:
+    """Resize a PIL Image so shortest side >= 28 and longest side <= 2048."""
+    w, h = img.size
+    if min(w, h) >= MIN_IMAGE_SIDE and max(w, h) <= MAX_IMAGE_SIDE:
+        return img
+    scale = 1.0
+    if max(w, h) > MAX_IMAGE_SIDE:
+        scale = MAX_IMAGE_SIDE / max(w, h)
+    if min(w * scale, h * scale) < MIN_IMAGE_SIDE:
+        scale = MIN_IMAGE_SIDE / min(w, h)
+    new_w, new_h = max(int(w * scale), 1), max(int(h * scale), 1)
+    if new_w == w and new_h == h:
+        return img
+    logger.info(f"Resizing image from {w}x{h} to {new_w}x{new_h}")
+    return img.resize((new_w, new_h), Image.LANCZOS)
+
+
 def encode_image_to_base64(image: Image.Image, format: str = "PNG") -> str:
     """
     Encode a PIL Image to base64 string.
+    Automatically resizes so shortest side >= 28 and longest side <= 2048.
 
     Args:
         image: PIL Image object
@@ -236,14 +259,14 @@ def encode_image_to_base64(image: Image.Image, format: str = "PNG") -> str:
     Returns:
         Base64-encoded image string with data URI prefix
     """
+    image = _ensure_pil_image_dimensions(image)
+
     buffer = io.BytesIO()
     image.save(buffer, format=format)
     image_bytes = buffer.getvalue()
     base64_str = base64.b64encode(image_bytes).decode("utf-8")
 
-    # Determine MIME type
     mime_type = f"image/{format.lower()}"
-
     return f"data:{mime_type};base64,{base64_str}"
 
 

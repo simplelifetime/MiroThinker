@@ -9,11 +9,47 @@ the agent's context in a multi-modal format compatible with OpenAI's API.
 """
 
 import base64
+import io
+import logging
 import mimetypes
 from urllib.parse import urlparse
 
 from fastmcp import FastMCP
+from PIL import Image
 import requests
+
+logger = logging.getLogger(__name__)
+
+_MIN_IMAGE_SIDE = 28
+_MAX_IMAGE_SIDE = 2048
+
+
+def _ensure_image_dimensions(image_bytes: bytes) -> bytes:
+    """Resize so shortest side >= 28 and longest side <= 2048."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        w, h = img.size
+        if min(w, h) >= _MIN_IMAGE_SIDE and max(w, h) <= _MAX_IMAGE_SIDE:
+            return image_bytes
+        scale = 1.0
+        if max(w, h) > _MAX_IMAGE_SIDE:
+            scale = _MAX_IMAGE_SIDE / max(w, h)
+        if min(w * scale, h * scale) < _MIN_IMAGE_SIDE:
+            scale = _MIN_IMAGE_SIDE / min(w, h)
+        new_w, new_h = max(int(w * scale), 1), max(int(h * scale), 1)
+        if new_w == w and new_h == h:
+            return image_bytes
+        logger.info(f"Resizing image from {w}x{h} to {new_w}x{new_h}")
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        out = io.BytesIO()
+        fmt = img.format or "PNG"
+        if img.mode == "RGBA" and fmt.upper() == "JPEG":
+            img = img.convert("RGB")
+        img.save(out, format=fmt)
+        return out.getvalue()
+    except Exception as e:
+        logger.warning(f"Failed to resize image: {e}")
+        return image_bytes
 
 
 def is_valid_image(content: bytes) -> bool:
@@ -208,6 +244,9 @@ async def fetch_image(url: str) -> str:
     if error_message:
         # Return error message in JSON format
         return f'{{"error": "{error_message}"}}'
+
+    # Ensure image dimensions are within bounds
+    image_bytes = _ensure_image_dimensions(image_bytes)
 
     # Encode to base64
     try:

@@ -11,6 +11,7 @@ from typing import Optional, Tuple, Union
 
 import requests
 
+from ..utils.image_utils import ensure_image_dimensions
 from ..utils.prompt_utils import FORMAT_ERROR_MESSAGE
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,46 @@ class OutputFormatter:
         "Referer": "https://www.google.com/",
     }
 
+    _IMAGE_MAGIC_BYTES = [
+        (b'\xFF\xD8\xFF', 'image/jpeg'),
+        (b'\x89\x50\x4E\x47\x0D\x0A\x1A\x0A', 'image/png'),
+        (b'GIF87a', 'image/gif'),
+        (b'GIF89a', 'image/gif'),
+        (b'BM', 'image/bmp'),
+        (b'RIFF', 'image/webp'),
+    ]
+
+    def _validate_image_bytes(self, data: bytes, url: str) -> Optional[str]:
+        """Validate downloaded bytes are a real image. Returns detected mime type or None."""
+        if not data or len(data) < 8:
+            logger.warning(f"Thumbnail too small ({len(data) if data else 0} bytes) from {url}")
+            return None
+
+        content_start = data[:100].strip().lower()
+        if content_start.startswith((b'<!doctype', b'<html', b'<head', b'<?xml')):
+            logger.warning(
+                f"Thumbnail is HTML/XML, not an image: url={url}, "
+                f"first_bytes={data[:80]!r}"
+            )
+            return None
+
+        for sig, mime in self._IMAGE_MAGIC_BYTES:
+            if data.startswith(sig):
+                return mime
+
+        try:
+            from PIL import Image
+            from io import BytesIO
+            img = Image.open(BytesIO(data))
+            img.verify()
+            return f"image/{img.format.lower()}" if img.format else "image/jpeg"
+        except Exception as e:
+            logger.warning(
+                f"Thumbnail failed PIL validation: url={url}, size={len(data)}, "
+                f"first_20_bytes={data[:20]!r}, error={e}"
+            )
+            return None
+
     def _download_thumbnail(self, url: str, timeout: int = 10, max_retries: int = 2) -> Optional[str]:
         """
         Download a thumbnail image and return it as a base64 data URL.
@@ -130,11 +171,20 @@ class OutputFormatter:
                     url, timeout=timeout, headers=self._THUMBNAIL_HEADERS
                 )
                 response.raise_for_status()
-                content_type = response.headers.get("content-type", "image/jpeg")
-                if "image" not in content_type:
-                    content_type = "image/jpeg"
-                image_base64 = base64.b64encode(response.content).decode("utf-8")
-                return f"data:{content_type};base64,{image_base64}"
+                content_type = response.headers.get("content-type", "")
+                raw_bytes = response.content
+
+                detected_mime = self._validate_image_bytes(raw_bytes, url)
+                if detected_mime is None:
+                    logger.warning(
+                        f"Skipping invalid thumbnail: url={url}, "
+                        f"content_type={content_type}, size={len(raw_bytes)}"
+                    )
+                    return None
+
+                raw_bytes = ensure_image_dimensions(raw_bytes)
+                image_base64 = base64.b64encode(raw_bytes).decode("utf-8")
+                return f"data:{detected_mime};base64,{image_base64}"
             except Exception as e:
                 if attempt == max_retries - 1:
                     logger.warning(f"Failed to download thumbnail from {url}: {e}")

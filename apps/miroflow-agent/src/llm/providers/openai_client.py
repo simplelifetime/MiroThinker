@@ -368,6 +368,7 @@ class OpenAIClient(BaseClient):
                             or "Invalid base64" in error_str
                             or "-4003" in error_str
                             or "至少要包含" in error_str
+                            or "cannot identify image" in error_str
                         )
                         if should_dump_messages:
                             self._debug_dump_messages(messages_for_llm, error_str)
@@ -377,6 +378,14 @@ class OpenAIClient(BaseClient):
                                     "error",
                                     "LLM | Content Validation Error (-4003)",
                                     "Messages contain empty content or unreachable image URLs. "
+                                    "Check debug logs above for details. Not retrying.",
+                                )
+                                raise e
+                            if "cannot identify image" in error_str:
+                                self.task_log.log_step(
+                                    "error",
+                                    "LLM | Invalid Image Error",
+                                    "Messages contain an image that cannot be identified (corrupted or invalid format). "
                                     "Check debug logs above for details. Not retrying.",
                                 )
                                 raise e

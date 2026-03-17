@@ -50,6 +50,69 @@ _mcp_server_cache = get_search_cache(task_id=_task_id)
 # logger.info(f"[SEARCH_CACHE] Created MCP server cache instance: task_id={_mcp_server_cache.task_id}, file={_mcp_server_cache.task_cache_file}, enabled={_mcp_server_cache.enabled}")
 
 
+def _detect_image_mime(data: bytes) -> str | None:
+    """Return mime type if data starts with a known image signature, else None."""
+    if not data or len(data) < 8:
+        return None
+    sigs = [
+        (b'\xFF\xD8\xFF', 'image/jpeg'),
+        (b'\x89PNG\r\n\x1a\n', 'image/png'),
+        (b'GIF87a', 'image/gif'),
+        (b'GIF89a', 'image/gif'),
+        (b'BM', 'image/bmp'),
+        (b'RIFF', 'image/webp'),
+    ]
+    for sig, mime in sigs:
+        if data.startswith(sig):
+            return mime
+    content_start = data[:100].strip().lower()
+    if content_start.startswith((b'<!doctype', b'<html', b'<head', b'<?xml')):
+        return None
+    try:
+        from PIL import Image
+        from io import BytesIO
+        img = Image.open(BytesIO(data))
+        img.verify()
+        return f"image/{img.format.lower()}" if img.format else "image/jpeg"
+    except Exception:
+        return None
+
+
+_MIN_IMAGE_SIDE = 28
+_MAX_IMAGE_SIDE = 2048
+
+
+def _ensure_image_dimensions(image_bytes: bytes) -> bytes:
+    """Resize so shortest side >= 28 and longest side <= 2048. Returns PNG bytes."""
+    try:
+        from PIL import Image as _PILImage
+        from io import BytesIO as _BytesIO
+        img = _PILImage.open(_BytesIO(image_bytes))
+        w, h = img.size
+        short_side, long_side = min(w, h), max(w, h)
+        if short_side >= _MIN_IMAGE_SIDE and long_side <= _MAX_IMAGE_SIDE:
+            return image_bytes
+        scale = 1.0
+        if long_side > _MAX_IMAGE_SIDE:
+            scale = _MAX_IMAGE_SIDE / long_side
+        if min(w * scale, h * scale) < _MIN_IMAGE_SIDE:
+            scale = _MIN_IMAGE_SIDE / min(w, h)
+        new_w, new_h = max(int(w * scale), 1), max(int(h * scale), 1)
+        if new_w == w and new_h == h:
+            return image_bytes
+        logger.info(f"Resizing image from {w}x{h} to {new_w}x{new_h}")
+        img = img.resize((new_w, new_h), _PILImage.LANCZOS)
+        out = _BytesIO()
+        fmt = img.format or "PNG"
+        if img.mode == "RGBA" and fmt.upper() == "JPEG":
+            img = img.convert("RGB")
+        img.save(out, format=fmt)
+        return out.getvalue()
+    except Exception as e:
+        logger.warning(f"Failed to resize image: {e}")
+        return image_bytes
+
+
 def download_and_encode_images(
     image_results: List[Dict[str, Any]], max_images: int = 5, limit_results: bool = True
 ) -> List[Dict[str, Any]]:
@@ -72,26 +135,33 @@ def download_and_encode_images(
             continue
 
         try:
-            # Download image
             response = requests.get(image_url, timeout=10, stream=True)
             response.raise_for_status()
 
-            # Encode to base64
-            image_base64 = base64.b64encode(response.content).decode("utf-8")
-            image_base64_with_mime = f"data:image/jpeg;base64,{image_base64}"
+            raw_bytes = response.content
+            detected_mime = _detect_image_mime(raw_bytes)
+            if detected_mime is None:
+                content_type = response.headers.get("content-type", "")
+                logger.warning(
+                    f"Skipping invalid image {idx + 1}: url={image_url}, "
+                    f"content_type={content_type}, size={len(raw_bytes)}, "
+                    f"first_20_bytes={raw_bytes[:20]!r}"
+                )
+                processed_results.append(result)
+                continue
 
-            # Add base64 data to result
+            raw_bytes = _ensure_image_dimensions(raw_bytes)
+            image_base64 = base64.b64encode(raw_bytes).decode("utf-8")
+            image_base64_with_mime = f"data:{detected_mime};base64,{image_base64}"
+
             result_copy = result.copy()
             result_copy["base64_data"] = image_base64_with_mime
-
             processed_results.append(result_copy)
 
         except Exception as e:
-            print(f"Warning: Failed to download/encode image {idx + 1}: {str(e)}")
-            # Keep the result without base64 data
+            logger.warning(f"Failed to download/encode image {idx + 1} ({image_url}): {e}")
             processed_results.append(result)
 
-    # Include remaining results without processing (only if limit_results is False)
     if not limit_results and len(image_results) > max_images:
         processed_results.extend(image_results[max_images:])
 
@@ -792,11 +862,18 @@ def image_search(
         result_json = json.dumps(data, ensure_ascii=False)
 
         # Cache the result with the same normalized parameters
+        # logger.info(f"[SEARCH_CACHE] image_search: calling cache.set for query='{q[:50]}...'")
         cache.set("image_search", q, result_json, **cache_params)
+        # if cache.enabled:
+        #     logger.info(f"[SEARCH_CACHE] image_search: cache.set completed, cache now has {len(cache._memory_cache)} entries")
+        # else:
+        #     logger.info(f"[SEARCH_CACHE] image_search: cache.set skipped (cache disabled)")
 
         # Immediately save to file after caching
         # This is necessary because each tool call runs in a separate process
         cache.save_to_file(force=True)
+        # if cache.enabled:
+        #     logger.info(f"[SEARCH_CACHE] image_search: saved cache to file")
 
         return result_json
 

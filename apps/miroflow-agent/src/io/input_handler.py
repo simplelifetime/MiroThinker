@@ -49,6 +49,7 @@ load_dotenv()
 # Import image utilities for multi-modal support
 from ..utils.image_utils import (
     encode_image_to_base64,
+    ensure_image_dimensions,
     format_image_for_context,
     generate_simple_image_caption,
     get_image_mime_type,
@@ -108,9 +109,10 @@ def _generate_image_caption(image_path: str) -> str:
 
         client = _create_openai_compatible_client(api_key=OPENAI_API_KEY)
 
-        # Read and encode image
+        # Read, resize if needed, and encode image
         with open(image_path, "rb") as image_file:
-            image_data = base64.b64encode(image_file.read()).decode("utf-8")
+            raw_bytes = ensure_image_dimensions(image_file.read())
+            image_data = base64.b64encode(raw_bytes).decode("utf-8")
 
         # Guess MIME type
         _, ext = os.path.splitext(image_path)
@@ -270,9 +272,10 @@ def _extract_task_relevant_info_from_image(
 
         client = _create_openai_compatible_client(api_key=OPENAI_API_KEY)
 
-        # Read and encode image
+        # Read, resize if needed, and encode image
         with open(image_path, "rb") as image_file:
-            image_data = base64.b64encode(image_file.read()).decode("utf-8")
+            raw_bytes = ensure_image_dimensions(image_file.read())
+            image_data = base64.b64encode(raw_bytes).decode("utf-8")
 
         # Guess MIME type
         _, ext = os.path.splitext(image_path)
@@ -470,13 +473,17 @@ def _process_single_image(image_path: str, task_description: str) -> Tuple[dict,
 
     Returns:
         Tuple of (image_content_dict, text_description, file_content_section)
+        Raises ValueError if image cannot be encoded (e.g. file missing or empty).
     """
     display_filename = os.path.basename(image_path)
 
     image_base64 = encode_image_to_base64(image_path)
     if not image_base64:
-        print(f"Error: Failed to encode image {image_path}")
-        image_base64 = ""
+        file_size = os.path.getsize(image_path) if os.path.exists(image_path) else -1
+        raise ValueError(
+            f"Failed to encode image to base64: path={image_path}, "
+            f"exists={os.path.exists(image_path)}, file_size={file_size}"
+        )
 
     mime_type = get_image_mime_type(image_path)
     image_base64_with_mime = f"data:{mime_type};base64,{image_base64}"

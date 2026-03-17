@@ -11,6 +11,8 @@ This module provides functions for:
 """
 
 import base64
+import io
+import logging
 import os
 import random
 import shutil
@@ -25,9 +27,63 @@ from typing import Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
+from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 # Ensure .env file is loaded
 load_dotenv()
+
+MIN_IMAGE_SIDE = 28
+MAX_IMAGE_SIDE = 2048
+
+
+def ensure_image_dimensions(
+    image_bytes: bytes,
+    min_side: int = MIN_IMAGE_SIDE,
+    max_side: int = MAX_IMAGE_SIDE,
+) -> bytes:
+    """Resize image bytes so that the shortest side >= *min_side* and the
+    longest side <= *max_side*.  Returns the (possibly modified) image as
+    PNG bytes.  If the input is already within bounds, it is returned
+    unchanged.
+
+    The function preserves aspect ratio.  When both constraints cannot be
+    satisfied simultaneously (image would need to be both up- and down-scaled),
+    the *max_side* constraint takes priority.
+    """
+    img = Image.open(io.BytesIO(image_bytes))
+    w, h = img.size
+    short_side = min(w, h)
+    long_side = max(w, h)
+
+    if short_side >= min_side and long_side <= max_side:
+        return image_bytes
+
+    scale = 1.0
+    if long_side > max_side:
+        scale = max_side / long_side
+    if min(w * scale, h * scale) < min_side:
+        scale = min_side / min(w, h)
+
+    new_w = max(int(w * scale), 1)
+    new_h = max(int(h * scale), 1)
+
+    if new_w == w and new_h == h:
+        return image_bytes
+
+    logger.info(
+        f"Resizing image from {w}x{h} to {new_w}x{new_h} "
+        f"(min_side={min_side}, max_side={max_side})"
+    )
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+
+    out = io.BytesIO()
+    fmt = img.format or "PNG"
+    if img.mode == "RGBA" and fmt.upper() == "JPEG":
+        img = img.convert("RGB")
+    img.save(out, format=fmt)
+    return out.getvalue()
 
 
 class _SilentHTTPHandler(SimpleHTTPRequestHandler):
@@ -215,10 +271,33 @@ def encode_image_to_base64(image_path: str) -> Optional[str]:
         Base64-encoded image string, or None if encoding fails
     """
     try:
+        if not os.path.exists(image_path):
+            print(f"Error: Image file does not exist: {image_path}")
+            return None
+
+        file_size = os.path.getsize(image_path)
+        if file_size == 0:
+            print(f"Error: Image file is empty (0 bytes): {image_path}")
+            return None
+
         with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode("utf-8")
+            raw_bytes = image_file.read()
+
+        if len(raw_bytes) == 0:
+            print(f"Error: Read 0 bytes from image file: {image_path}")
+            return None
+
+        raw_bytes = ensure_image_dimensions(raw_bytes)
+
+        encoded = base64.b64encode(raw_bytes).decode("utf-8")
+        if not encoded:
+            print(f"Error: base64 encoding produced empty result for: {image_path} (file_size={file_size})")
+            return None
+
+        print(f"Info: Encoded image {os.path.basename(image_path)}: file_size={file_size}, base64_len={len(encoded)}")
+        return encoded
     except Exception as e:
-        print(f"Error: Failed to encode image to base64: {str(e)}")
+        print(f"Error: Failed to encode image to base64: {image_path}, error={e}")
         return None
 
 

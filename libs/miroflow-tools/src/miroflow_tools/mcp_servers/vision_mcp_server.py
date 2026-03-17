@@ -3,10 +3,46 @@
 
 import asyncio
 import base64
+import io
+import logging
 import os
 
 from fastmcp import FastMCP
 from openai import OpenAI
+from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+_MIN_IMAGE_SIDE = 28
+_MAX_IMAGE_SIDE = 2048
+
+
+def _ensure_image_dimensions(image_bytes: bytes) -> bytes:
+    """Resize so shortest side >= 28 and longest side <= 2048."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        w, h = img.size
+        if min(w, h) >= _MIN_IMAGE_SIDE and max(w, h) <= _MAX_IMAGE_SIDE:
+            return image_bytes
+        scale = 1.0
+        if max(w, h) > _MAX_IMAGE_SIDE:
+            scale = _MAX_IMAGE_SIDE / max(w, h)
+        if min(w * scale, h * scale) < _MIN_IMAGE_SIDE:
+            scale = _MIN_IMAGE_SIDE / min(w, h)
+        new_w, new_h = max(int(w * scale), 1), max(int(h * scale), 1)
+        if new_w == w and new_h == h:
+            return image_bytes
+        logger.info(f"Resizing image from {w}x{h} to {new_w}x{new_h}")
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        out = io.BytesIO()
+        fmt = img.format or "PNG"
+        if img.mode == "RGBA" and fmt.upper() == "JPEG":
+            img = img.convert("RGB")
+        img.save(out, format=fmt)
+        return out.getvalue()
+    except Exception as e:
+        logger.warning(f"Failed to resize image: {e}")
+        return image_bytes
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -126,9 +162,12 @@ async def visual_question_answering(media_path_or_url: str, question: str) -> st
                 if not is_valid:
                     return error_msg
 
-                # Read and encode file
+                # Read and encode file (resize images to fit dimension constraints)
                 with open(media_path_or_url, "rb") as media_file:
-                    media_data = base64.b64encode(media_file.read()).decode("utf-8")
+                    raw_bytes = media_file.read()
+                if media_category == "image":
+                    raw_bytes = _ensure_image_dimensions(raw_bytes)
+                media_data = base64.b64encode(raw_bytes).decode("utf-8")
 
                 # Add image_url content (works for both images and videos in OpenAI API)
                 content.append(
