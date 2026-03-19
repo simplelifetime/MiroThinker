@@ -120,8 +120,12 @@ class OutputFormatter:
         (b'RIFF', 'image/webp'),
     ]
 
+    _LLM_SUPPORTED_MIME_TYPES = {
+        'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+    }
+
     def _validate_image_bytes(self, data: bytes, url: str) -> Optional[str]:
-        """Validate downloaded bytes are a real image. Returns detected mime type or None."""
+        """Validate downloaded bytes are a real image with LLM-supported format. Returns detected mime type or None."""
         if not data or len(data) < 8:
             logger.warning(f"Thumbnail too small ({len(data) if data else 0} bytes) from {url}")
             return None
@@ -136,6 +140,9 @@ class OutputFormatter:
 
         for sig, mime in self._IMAGE_MAGIC_BYTES:
             if data.startswith(sig):
+                if mime not in self._LLM_SUPPORTED_MIME_TYPES:
+                    logger.warning(f"Skipping unsupported image format {mime} from {url}")
+                    return None
                 return mime
 
         try:
@@ -143,7 +150,11 @@ class OutputFormatter:
             from io import BytesIO
             img = Image.open(BytesIO(data))
             img.verify()
-            return f"image/{img.format.lower()}" if img.format else "image/jpeg"
+            mime = f"image/{img.format.lower()}" if img.format else "image/jpeg"
+            if mime not in self._LLM_SUPPORTED_MIME_TYPES:
+                logger.warning(f"Skipping unsupported image format {mime} (detected by PIL) from {url}")
+                return None
+            return mime
         except Exception as e:
             logger.warning(
                 f"Thumbnail failed PIL validation: url={url}, size={len(data)}, "

@@ -50,8 +50,13 @@ _mcp_server_cache = get_search_cache(task_id=_task_id)
 # logger.info(f"[SEARCH_CACHE] Created MCP server cache instance: task_id={_mcp_server_cache.task_id}, file={_mcp_server_cache.task_cache_file}, enabled={_mcp_server_cache.enabled}")
 
 
+_LLM_SUPPORTED_MIME_TYPES = {
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+}
+
+
 def _detect_image_mime(data: bytes) -> str | None:
-    """Return mime type if data starts with a known image signature, else None."""
+    """Return mime type if data starts with a known LLM-supported image signature, else None."""
     if not data or len(data) < 8:
         return None
     sigs = [
@@ -64,6 +69,9 @@ def _detect_image_mime(data: bytes) -> str | None:
     ]
     for sig, mime in sigs:
         if data.startswith(sig):
+            if mime not in _LLM_SUPPORTED_MIME_TYPES:
+                logger.warning(f"Skipping unsupported image format: {mime}")
+                return None
             return mime
     content_start = data[:100].strip().lower()
     if content_start.startswith((b'<!doctype', b'<html', b'<head', b'<?xml')):
@@ -73,7 +81,11 @@ def _detect_image_mime(data: bytes) -> str | None:
         from io import BytesIO
         img = Image.open(BytesIO(data))
         img.verify()
-        return f"image/{img.format.lower()}" if img.format else "image/jpeg"
+        mime = f"image/{img.format.lower()}" if img.format else "image/jpeg"
+        if mime not in _LLM_SUPPORTED_MIME_TYPES:
+            logger.warning(f"Skipping unsupported image format detected by PIL: {mime}")
+            return None
+        return mime
     except Exception:
         return None
 

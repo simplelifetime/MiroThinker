@@ -95,6 +95,10 @@ IMAGE_SIGNATURES = {
     b'\x00\x00\x02\x00': 'image/x-icon',  # CUR
 }
 
+LLM_SUPPORTED_MIME_TYPES = {
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+}
+
 
 def validate_image_content(image_bytes: bytes) -> tuple[bool, str, str]:
     """
@@ -124,6 +128,8 @@ def validate_image_content(image_bytes: bytes) -> tuple[bool, str, str]:
             if signature == b'RIFF' and len(image_bytes) >= 12:
                 if image_bytes[8:12] != b'WEBP':
                     continue  # Not a WebP file, might be other RIFF format
+            if mime_type not in LLM_SUPPORTED_MIME_TYPES:
+                return False, mime_type, f"Unsupported image format: {mime_type}. Only JPEG, PNG, GIF, and WebP are supported by the LLM."
             return True, mime_type, ""
     
     # If no known signature matched, try to use PIL to validate
@@ -133,9 +139,10 @@ def validate_image_content(image_bytes: bytes) -> tuple[bool, str, str]:
         img = Image.open(BytesIO(image_bytes))
         img.verify()  # Verify it's a valid image
         mime_type = f"image/{img.format.lower()}" if img.format else "image/unknown"
+        if mime_type not in LLM_SUPPORTED_MIME_TYPES:
+            return False, mime_type, f"Unsupported image format: {mime_type}. Only JPEG, PNG, GIF, and WebP are supported by the LLM."
         return True, mime_type, ""
     except ImportError:
-        # PIL not available, accept unknown format with warning
         return True, "image/unknown", ""
     except Exception as e:
         return False, "", f"Downloaded content is not a valid image: {str(e)}"
