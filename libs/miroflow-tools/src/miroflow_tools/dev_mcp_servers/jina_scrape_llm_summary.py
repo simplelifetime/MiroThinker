@@ -547,22 +547,54 @@ async def scrape_url_with_python(
     }
 
 
+# EXTRACT_INFO_PROMPT = """You are given a piece of content and the requirement of information to extract. Your task is to extract the information specifically requested. Be precise and focus exclusively on the requested information.
+
+# INFORMATION TO EXTRACT:
+# {}
+
+# INSTRUCTIONS:
+# 1. Extract the information relevant to the focus above.
+# 2. If the exact information is not found, extract the most closely related details.
+# 3. Be specific and include exact details when available.
+# 4. Clearly organize the extracted information for easy understanding.
+# 5. Do not include general summaries or unrelated content.
+
+# CONTENT TO ANALYZE:
+# {}
+
+# EXTRACTED INFORMATION:"""
+
 EXTRACT_INFO_PROMPT = """You are given a piece of content and the requirement of information to extract. Your task is to extract the information specifically requested. Be precise and focus exclusively on the requested information.
 
 INFORMATION TO EXTRACT:
 {}
 
+ADDITIONAL REQUIREMENT (IMPORTANT):
+- If the content contains images, you MUST extract:
+  1. Image URL
+  2. Image caption (or surrounding descriptive text if caption is not explicitly provided)
+- Keep each image as a structured item.
+- If the images seem irrelevant to the other parts of the content (e.g., advertisements), do not include them in the output.
+
+OUTPUT FORMAT:
+- Organize the extracted information clearly.
+- If images exist, include a section called "Images" with a list of:
+  - url: <image url>
+  - caption: <image caption or nearest description>
+
 INSTRUCTIONS:
-1. Extract the information relevant to the focus above.
+1. Extract only the information relevant to the focus above.
 2. If the exact information is not found, extract the most closely related details.
 3. Be specific and include exact details when available.
-4. Clearly organize the extracted information for easy understanding.
+4. Preserve original wording for captions when possible.
 5. Do not include general summaries or unrelated content.
 
 CONTENT TO ANALYZE:
 {}
 
-EXTRACTED INFORMATION:"""
+EXTRACTED INFORMATION:
+"""
+
 
 
 def get_prompt_with_truncation(

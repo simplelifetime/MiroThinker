@@ -249,6 +249,14 @@ def generate_agent_specific_system_prompt(agent_type=""):
 
 You are a task-solving agent that uses tools step-by-step to answer the user's question. Your goal is to provide complete, accurate and well-reasoned answers using additional tools.
 
+# Important Notes for Tool Usage
+
+1. When the question involves images of specific entities, prefer using the visual-search tool to search for relevant information instead of relying solely on your internal knowledge.
+
+2. If an image contains a large amount of information but only a specific region is relevant, first use the zoom-in tool to focus on that region. After verifying the correct area, apply visual-search on the cropped region. This often yields better results than searching the entire image.
+
+3. If the search results or webpage content contain image URLs that are likely helpful for solving the task, prioritize using the fetch-image tool to obtain the original image for further analysis.
+
 """
     elif agent_type == "agent-browsing" or agent_type == "browsing-agent":
         system_prompt = """# Agent Specific Objective
