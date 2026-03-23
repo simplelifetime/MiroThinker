@@ -402,11 +402,16 @@ def convert_messages_to_sharegpt(
 
         elif role == "tool":
             # Tool return results - include as human messages
-            if content:
+            # Process content to extract images and replace with <image> markers
+            processed_content, image_paths = process_content_with_images(
+                content, images_dir, task_id, msg_idx, image_counter, existing_images
+            )
+            if processed_content:
                 sharegpt_conversations.append({
                     "from": sharegpt_role,
-                    "value": content
+                    "value": processed_content
                 })
+            all_image_paths.extend(image_paths)
 
         else:
             # Regular user or assistant messages
