@@ -8,6 +8,7 @@ import logging
 import os
 
 from fastmcp import FastMCP
+from miroflow_tools.image_llm_payload import ensure_image_base64_under_limit
 from openai import OpenAI
 from PIL import Image
 
@@ -167,6 +168,9 @@ async def visual_question_answering(media_path_or_url: str, question: str) -> st
                     raw_bytes = media_file.read()
                 if media_category == "image":
                     raw_bytes = _ensure_image_dimensions(raw_bytes)
+                    raw_bytes, mime_type = ensure_image_base64_under_limit(
+                        raw_bytes, mime_type=mime_type
+                    )
                 media_data = base64.b64encode(raw_bytes).decode("utf-8")
 
                 # Add image_url content (works for both images and videos in OpenAI API)

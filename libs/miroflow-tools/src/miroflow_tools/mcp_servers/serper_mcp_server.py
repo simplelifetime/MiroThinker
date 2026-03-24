@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from miroflow_tools.image_llm_payload import ensure_image_base64_under_limit
 from tenacity import (
     RetryError,
     retry,
@@ -163,8 +164,11 @@ def download_and_encode_images(
                 continue
 
             raw_bytes = _ensure_image_dimensions(raw_bytes)
+            raw_bytes, out_mime = ensure_image_base64_under_limit(
+                raw_bytes, mime_type=detected_mime
+            )
             image_base64 = base64.b64encode(raw_bytes).decode("utf-8")
-            image_base64_with_mime = f"data:{detected_mime};base64,{image_base64}"
+            image_base64_with_mime = f"data:{out_mime};base64,{image_base64}"
 
             result_copy = result.copy()
             result_copy["base64_data"] = image_base64_with_mime

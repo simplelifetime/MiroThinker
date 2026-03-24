@@ -40,6 +40,7 @@ import pptx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from markitdown import MarkItDown
+from miroflow_tools.image_llm_payload import ensure_image_base64_under_limit
 from openai import AzureOpenAI, OpenAI
 from openpyxl.utils import get_column_letter
 
@@ -109,12 +110,10 @@ def _generate_image_caption(image_path: str) -> str:
 
         client = _create_openai_compatible_client(api_key=OPENAI_API_KEY)
 
-        # Read, resize if needed, and encode image
+        # Read, resize if needed, clamp base64 payload (JPEG if needed), then encode
         with open(image_path, "rb") as image_file:
             raw_bytes = ensure_image_dimensions(image_file.read())
-            image_data = base64.b64encode(raw_bytes).decode("utf-8")
 
-        # Guess MIME type
         _, ext = os.path.splitext(image_path)
         ext = ext.lower()
         mime_type = {
@@ -124,6 +123,10 @@ def _generate_image_caption(image_path: str) -> str:
             ".gif": "image/gif",
             ".webp": "image/webp",
         }.get(ext, "image/jpeg")
+        raw_bytes, mime_type = ensure_image_base64_under_limit(
+            raw_bytes, mime_type=mime_type
+        )
+        image_data = base64.b64encode(raw_bytes).decode("utf-8")
 
         # Call OpenAI API
         response = client.chat.completions.create(
@@ -272,12 +275,10 @@ def _extract_task_relevant_info_from_image(
 
         client = _create_openai_compatible_client(api_key=OPENAI_API_KEY)
 
-        # Read, resize if needed, and encode image
+        # Read, resize if needed, clamp base64 payload (JPEG if needed), then encode
         with open(image_path, "rb") as image_file:
             raw_bytes = ensure_image_dimensions(image_file.read())
-            image_data = base64.b64encode(raw_bytes).decode("utf-8")
 
-        # Guess MIME type
         _, ext = os.path.splitext(image_path)
         ext = ext.lower()
         mime_type = {
@@ -287,6 +288,10 @@ def _extract_task_relevant_info_from_image(
             ".gif": "image/gif",
             ".webp": "image/webp",
         }.get(ext, "image/jpeg")
+        raw_bytes, mime_type = ensure_image_base64_under_limit(
+            raw_bytes, mime_type=mime_type
+        )
+        image_data = base64.b64encode(raw_bytes).decode("utf-8")
 
         # Call OpenAI API with task-specific prompt
         response = client.chat.completions.create(
@@ -477,15 +482,15 @@ def _process_single_image(image_path: str, task_description: str) -> Tuple[dict,
     """
     display_filename = os.path.basename(image_path)
 
-    image_base64 = encode_image_to_base64(image_path)
-    if not image_base64:
+    encoded_pair = encode_image_to_base64(image_path)
+    if not encoded_pair:
         file_size = os.path.getsize(image_path) if os.path.exists(image_path) else -1
         raise ValueError(
             f"Failed to encode image to base64: path={image_path}, "
             f"exists={os.path.exists(image_path)}, file_size={file_size}"
         )
 
-    mime_type = get_image_mime_type(image_path)
+    image_base64, mime_type = encoded_pair
     image_base64_with_mime = f"data:{mime_type};base64,{image_base64}"
 
     oss_uploader = OSSUploader()

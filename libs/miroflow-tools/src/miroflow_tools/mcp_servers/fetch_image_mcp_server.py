@@ -18,6 +18,8 @@ from fastmcp import FastMCP
 from PIL import Image
 import requests
 
+from miroflow_tools.image_llm_payload import ensure_image_base64_under_limit
+
 logger = logging.getLogger(__name__)
 
 _MIN_IMAGE_SIDE = 28
@@ -252,8 +254,11 @@ async def fetch_image(url: str) -> str:
         # Return error message in JSON format
         return f'{{"error": "{error_message}"}}'
 
-    # Ensure image dimensions are within bounds
+    # Ensure image dimensions are within bounds, then clamp base64 payload (JPEG if still > 500KiB)
     image_bytes = _ensure_image_dimensions(image_bytes)
+    image_bytes, mime_type = ensure_image_base64_under_limit(
+        image_bytes, mime_type=mime_type
+    )
 
     # Encode to base64
     try:

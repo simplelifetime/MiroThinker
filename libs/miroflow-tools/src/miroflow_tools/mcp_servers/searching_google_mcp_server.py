@@ -22,6 +22,14 @@ JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
 JINA_BASE_URL = os.environ.get("JINA_BASE_URL", "https://r.jina.ai")
 GOOGLE_SEARCH_PROXY = os.environ.get("GOOGLE_SEARCH_PROXY", "serper")
 
+# Proxy env vars to forward to MCP subprocess (StdioServerParameters.env replaces
+# the parent env, so these must be passed explicitly).
+_PROXY_ENV = {
+    k: v
+    for k, v in os.environ.items()
+    if k.lower() in ("http_proxy", "https_proxy", "no_proxy", "all_proxy")
+}
+
 # Google search result filtering environment variables
 REMOVE_SNIPPETS = os.environ.get("REMOVE_SNIPPETS", "").lower() in ("true", "1", "yes")
 REMOVE_KNOWLEDGE_GRAPH = os.environ.get("REMOVE_KNOWLEDGE_GRAPH", "").lower() in (
@@ -128,6 +136,7 @@ async def google_search(
         arguments["tbs"] = tbs
     # Prepare environment variables, inheriting from current environment
     server_env = {
+        **_PROXY_ENV,
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
@@ -732,6 +741,7 @@ async def scholar_search(
     }
     # Prepare environment variables, inheriting from current environment
     server_env = {
+        **_PROXY_ENV,
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
@@ -830,6 +840,7 @@ async def image_search(
         arguments["location"] = location
     # Prepare environment variables, inheriting from current environment
     server_env = {
+        **_PROXY_ENV,
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }
@@ -928,6 +939,7 @@ async def visual_search(
         arguments["location"] = location
     # Prepare environment variables, inheriting from current environment
     server_env = {
+        **_PROXY_ENV,
         "SERPER_API_KEY": SERPER_API_KEY,
         "SERPER_BASE_URL": SERPER_BASE_URL,
     }

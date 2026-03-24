@@ -27,6 +27,7 @@ from typing import Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
+from miroflow_tools.image_llm_payload import ensure_image_base64_under_limit
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -260,15 +261,18 @@ class OSSUploader:
         return self._upload_via_local_server(image, byte=byte)
 
 
-def encode_image_to_base64(image_path: str) -> Optional[str]:
+def encode_image_to_base64(
+    image_path: str,
+) -> Optional[Tuple[str, str]]:
     """
-    Encode an image file to base64 string.
+    Encode an image file to base64 after dimension clamp and optional JPEG shrink.
 
     Args:
         image_path: Path to the image file
 
     Returns:
-        Base64-encoded image string, or None if encoding fails
+        (base64_payload, mime_type) or None if encoding fails. *mime_type* reflects
+        re-encoding (e.g. image/jpeg) when the payload was clamped.
     """
     try:
         if not os.path.exists(image_path):
@@ -288,6 +292,10 @@ def encode_image_to_base64(image_path: str) -> Optional[str]:
             return None
 
         raw_bytes = ensure_image_dimensions(raw_bytes)
+        mime_hint = get_image_mime_type(image_path)
+        raw_bytes, out_mime = ensure_image_base64_under_limit(
+            raw_bytes, mime_type=mime_hint
+        )
 
         encoded = base64.b64encode(raw_bytes).decode("utf-8")
         if not encoded:
@@ -295,7 +303,7 @@ def encode_image_to_base64(image_path: str) -> Optional[str]:
             return None
 
         print(f"Info: Encoded image {os.path.basename(image_path)}: file_size={file_size}, base64_len={len(encoded)}")
-        return encoded
+        return encoded, out_mime
     except Exception as e:
         print(f"Error: Failed to encode image to base64: {image_path}, error={e}")
         return None

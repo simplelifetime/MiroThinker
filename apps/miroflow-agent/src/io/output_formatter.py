@@ -11,6 +11,8 @@ from typing import Optional, Tuple, Union
 
 import requests
 
+from miroflow_tools.image_llm_payload import ensure_image_base64_under_limit
+
 from ..utils.image_utils import ensure_image_dimensions
 from ..utils.prompt_utils import FORMAT_ERROR_MESSAGE
 
@@ -194,8 +196,11 @@ class OutputFormatter:
                     return None
 
                 raw_bytes = ensure_image_dimensions(raw_bytes)
+                raw_bytes, out_mime = ensure_image_base64_under_limit(
+                    raw_bytes, mime_type=detected_mime
+                )
                 image_base64 = base64.b64encode(raw_bytes).decode("utf-8")
-                return f"data:{detected_mime};base64,{image_base64}"
+                return f"data:{out_mime};base64,{image_base64}"
             except Exception as e:
                 if attempt == max_retries - 1:
                     logger.warning(f"Failed to download thumbnail from {url}: {e}")
