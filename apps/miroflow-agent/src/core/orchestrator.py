@@ -33,6 +33,7 @@ from ..utils.prompt_utils import (
     refusal_keywords,
 )
 from .answer_generator import AnswerGenerator
+from .progressive_context import ProgressiveContext, create_progressive_context
 from .stream_handler import StreamHandler
 from .tool_executor import ToolExecutor
 
@@ -147,6 +148,10 @@ class Orchestrator:
 
         # Context management settings
         self.context_compress_limit = cfg.agent.get("context_compress_limit", 0)
+
+        # Progressive context management (pluggable)
+        self.progressive_context: Optional[ProgressiveContext] = None
+        self.use_progressive_context = cfg.agent.get("use_progressive_context", False)
 
         # Initialize helper components
         self.stream = StreamHandler(stream_queue)
@@ -814,6 +819,18 @@ class Orchestrator:
         # Store tool_definitions for use in _save_message_history callback
         self._current_tool_definitions = tool_definitions
 
+        # Initialize progressive context (pluggable - only if enabled)
+        if self.use_progressive_context:
+            self.progressive_context = ProgressiveContext(
+                task_description=updated_task_description,
+                enabled=True,
+            )
+            self.task_log.log_step(
+                "info",
+                "Main Agent | Progressive Context",
+                "Progressive context management enabled",
+            )
+
         # Generate system prompt
         system_prompt = self.llm_client.generate_agent_system_prompt(
             date=date.today(),
@@ -845,6 +862,19 @@ class Orchestrator:
 
             self.task_log.save()
 
+            # Build effective system prompt with progressive context (pluggable)
+            effective_system_prompt = system_prompt
+            if self.progressive_context:
+                context_str = self.progressive_context.get_context_string()
+                if context_str:
+                    effective_system_prompt = (
+                        f"{system_prompt}\n\n"
+                        f"===== RESEARCH PROGRESS =====\n"
+                        f"{context_str}\n"
+                        f"=============================\n\n"
+                        f"Use tools to continue your research based on the above progress."
+                    )
+
             # LLM call
             (
                 assistant_response_text,
@@ -852,7 +882,7 @@ class Orchestrator:
                 tool_calls,
                 message_history,
             ) = await self.answer_generator.handle_llm_call(
-                system_prompt,
+                effective_system_prompt,
                 message_history,
                 tool_definitions,
                 turn_count,
@@ -1129,10 +1159,26 @@ class Orchestrator:
             # Update 'last_call_tokens'
             self.llm_client.last_call_tokens = main_agent_last_call_tokens
 
+            # Update progressive context (pluggable - only if enabled)
+            if self.progressive_context:
+                for call_data in tool_calls_data:
+                    tool_name = call_data.get("tool_name", "")
+                    tool_args = call_data.get("arguments", {})
+                    tool_result = call_data.get("result", {})
+                    if tool_result:
+                        await self.progressive_context.update(
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            tool_result=tool_result,
+                        )
+
             # Update message history
             message_history = self.llm_client.update_message_history(
                 message_history, all_tool_results_content_with_id
             )
+
+            # Note: Progressive context is injected into system_prompt in handle_llm_call,
+            # not here in message_history
 
             self.task_log.main_agent_message_history = {
                 "system_prompt": system_prompt,
@@ -1232,5 +1278,17 @@ class Orchestrator:
             "Main Agent | Task Completed",
             f"Main agent task {task_id} completed successfully",
         )
+
+        # Save progressive context state to task log (pluggable)
+        if self.progressive_context:
+            self.task_log.trace_data["progressive_context"] = (
+                self.progressive_context.to_dict()
+            )
+            self.task_log.log_step(
+                "info",
+                "Main Agent | Progressive Context",
+                f"Progressive context saved with {self.progressive_context.turn_count} turns tracked",
+            )
+
         gc.collect()
         return final_summary, final_boxed_answer, failure_experience_summary
